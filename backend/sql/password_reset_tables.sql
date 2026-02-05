@@ -1,0 +1,7 @@
+CREATE TABLE IF NOT EXISTS password_resets (
+  email VARCHAR(255) NOT NULL,
+  otp_code VARCHAR(10) NOT NULL,
+  otp_expires_at DATETIME NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (email)
+);
