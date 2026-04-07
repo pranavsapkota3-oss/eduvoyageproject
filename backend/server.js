@@ -193,6 +193,28 @@ const seedUniversities = async () => {
   }
 };
 
+const ensureSettingsTable = async () => {
+  try {
+    await db.query(
+      `CREATE TABLE IF NOT EXISTS user_settings (
+        user_id INT NOT NULL,
+        email_notifications TINYINT(1) NOT NULL DEFAULT 1,
+        scholarship_alerts TINYINT(1) NOT NULL DEFAULT 1,
+        marketing_updates TINYINT(1) NOT NULL DEFAULT 0,
+        preferred_currency VARCHAR(10) NOT NULL DEFAULT 'USD',
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (user_id),
+        CONSTRAINT fk_user_settings_user
+          FOREIGN KEY (user_id)
+          REFERENCES users(id)
+          ON DELETE CASCADE
+      )`
+    );
+  } catch (err) {
+    console.error("SETTINGS TABLE ERROR:", err);
+  }
+};
+
 // ✅ base route (fixes "Cannot GET /")
 app.get("/", (req, res) => {
   res.json({ message: "EduVoyage backend running" });
@@ -554,6 +576,183 @@ app.post("/api/auth/login", async (req, res) => {
 });
 
 // ƒo. AGENT USERS LIST
+app.get("/api/settings", authMiddleware, async (req, res) => {
+  try {
+    const [[userRow]] = await db.query(
+      `SELECT id, full_name, email, role
+       FROM users
+       WHERE id = ?`,
+      [req.user.id]
+    );
+
+    if (!userRow) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    let settingRows = [];
+    try {
+      const [rows] = await db.query(
+        `SELECT email_notifications, scholarship_alerts, marketing_updates, preferred_currency
+         FROM user_settings
+         WHERE user_id = ?`,
+        [req.user.id]
+      );
+      settingRows = rows;
+    } catch (settingsErr) {
+      if (settingsErr.code === "ER_NO_SUCH_TABLE") {
+        await ensureSettingsTable();
+      } else {
+        throw settingsErr;
+      }
+    }
+
+    const settings = settingRows[0] || {
+      email_notifications: 1,
+      scholarship_alerts: 1,
+      marketing_updates: 0,
+      preferred_currency: "USD",
+    };
+
+    return res.json({
+      profile: {
+        full_name: userRow.full_name || "",
+        email: userRow.email || "",
+        role: userRow.role || "student",
+      },
+      preferences: {
+        email_notifications: !!settings.email_notifications,
+        scholarship_alerts: !!settings.scholarship_alerts,
+        marketing_updates: !!settings.marketing_updates,
+        preferred_currency: settings.preferred_currency || "USD",
+      },
+    });
+  } catch (err) {
+    console.error("GET SETTINGS ERROR:", err);
+    return res.status(500).json({ message: "Server error", details: err.message });
+  }
+});
+
+app.put("/api/settings/profile", authMiddleware, async (req, res) => {
+  try {
+    const { full_name, email } = req.body;
+    if (!full_name || !email) {
+      return res.status(400).json({ message: "full_name and email are required" });
+    }
+
+    const normalizedEmail = String(email).trim().toLowerCase();
+    const normalizedName = String(full_name).trim();
+
+    const [exists] = await db.query(
+      "SELECT id FROM users WHERE email = ? AND id <> ?",
+      [normalizedEmail, req.user.id]
+    );
+    if (exists.length > 0) {
+      return res.status(409).json({ message: "Email already in use" });
+    }
+
+    await db.query(
+      "UPDATE users SET full_name = ?, email = ? WHERE id = ?",
+      [normalizedName, normalizedEmail, req.user.id]
+    );
+
+    const [rows] = await db.query(
+      "SELECT id, full_name, email, role FROM users WHERE id = ?",
+      [req.user.id]
+    );
+    const user = rows[0];
+
+    const token = jwt.sign(
+      { id: user.id, email: user.email, full_name: user.full_name, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    return res.json({
+      message: "Profile settings updated",
+      token,
+      user: { id: user.id, full_name: user.full_name, email: user.email, role: user.role },
+    });
+  } catch (err) {
+    console.error("UPDATE SETTINGS PROFILE ERROR:", err);
+    return res.status(500).json({ message: "Server error", details: err.message });
+  }
+});
+
+app.put("/api/settings/password", authMiddleware, async (req, res) => {
+  try {
+    const { current_password, new_password } = req.body;
+
+    if (!current_password || !new_password) {
+      return res.status(400).json({ message: "current_password and new_password are required" });
+    }
+    if (String(new_password).length < 6) {
+      return res.status(400).json({ message: "New password must be at least 6 characters" });
+    }
+
+    const [rows] = await db.query(
+      "SELECT password_hash FROM users WHERE id = ?",
+      [req.user.id]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const user = rows[0];
+    const ok = await bcrypt.compare(current_password, user.password_hash || "");
+    if (!ok) {
+      return res.status(401).json({ message: "Current password is incorrect" });
+    }
+
+    const password_hash = await bcrypt.hash(new_password, 10);
+    await db.query("UPDATE users SET password_hash = ? WHERE id = ?", [password_hash, req.user.id]);
+
+    return res.json({ message: "Password updated successfully" });
+  } catch (err) {
+    console.error("UPDATE SETTINGS PASSWORD ERROR:", err);
+    return res.status(500).json({ message: "Server error", details: err.message });
+  }
+});
+
+app.put("/api/settings/preferences", authMiddleware, async (req, res) => {
+  try {
+    const {
+      email_notifications = true,
+      scholarship_alerts = true,
+      marketing_updates = false,
+      preferred_currency = "USD",
+    } = req.body;
+
+    const allowedCurrencies = ["USD", "CAD", "AUD", "GBP", "NPR"];
+    const safeCurrency = allowedCurrencies.includes(String(preferred_currency).toUpperCase())
+      ? String(preferred_currency).toUpperCase()
+      : "USD";
+
+    await ensureSettingsTable();
+
+    await db.query(
+      `INSERT INTO user_settings
+          (user_id, email_notifications, scholarship_alerts, marketing_updates, preferred_currency)
+        VALUES (?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+          email_notifications = VALUES(email_notifications),
+          scholarship_alerts = VALUES(scholarship_alerts),
+          marketing_updates = VALUES(marketing_updates),
+          preferred_currency = VALUES(preferred_currency)`,
+      [
+        req.user.id,
+        email_notifications ? 1 : 0,
+        scholarship_alerts ? 1 : 0,
+        marketing_updates ? 1 : 0,
+        safeCurrency,
+      ]
+    );
+
+    return res.json({ message: "Preferences updated" });
+  } catch (err) {
+    console.error("UPDATE SETTINGS PREFERENCES ERROR:", err);
+    return res.status(500).json({ message: "Server error", details: err.message });
+  }
+});
 app.get("/api/admin/users", authMiddleware, requireAdmin, async (req, res) => {
   try {
     const { search = "", role = "", active = "" } = req.query;
@@ -637,15 +836,103 @@ app.delete("/api/admin/users/:id", authMiddleware, requireAdmin, async (req, res
 });
 
 // ƒo. PUBLIC UNIVERSITIES LIST
+app.get("/api/admin/summary", authMiddleware, requireAgentOrAdmin, async (req, res) => {
+  try {
+    const [[studentRows], [agentRows], [documentRows]] = await Promise.all([
+      db.query("SELECT COUNT(*) AS count FROM users WHERE role = 'student'"),
+      db.query("SELECT COUNT(*) AS count FROM users WHERE role = 'agent' AND is_active = 1"),
+      db.query("SELECT COUNT(*) AS count FROM user_documents"),
+    ]);
+
+    let applicationsSubmitted = 0;
+    try {
+      const [[applicationRows]] = await db.query("SELECT COUNT(*) AS count FROM applications");
+      applicationsSubmitted = applicationRows.count || 0;
+    } catch {
+      applicationsSubmitted = 0;
+    }
+
+    return res.json({
+      total_students: studentRows[0]?.count || 0,
+      active_agents: agentRows[0]?.count || 0,
+      pending_document_reviews: documentRows[0]?.count || 0,
+      applications_submitted: applicationsSubmitted,
+    });
+  } catch (err) {
+    console.error("ADMIN SUMMARY ERROR:", err);
+    return res.status(500).json({ message: "Server error", details: err.message });
+  }
+});
+
+app.get("/api/admin/documents", authMiddleware, requireAgentOrAdmin, async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      `SELECT d.id, d.user_id, d.file_name, d.file_size, d.file_url, d.mime_type, d.created_at,
+              u.full_name, u.email
+       FROM user_documents d
+       JOIN users u ON u.id = d.user_id
+       ORDER BY d.created_at DESC`
+    );
+
+    return res.json({ documents: rows });
+  } catch (err) {
+    console.error("ADMIN DOCUMENTS ERROR:", err);
+    return res.status(500).json({ message: "Server error", details: err.message });
+  }
+});
+
+app.get("/api/admin/applications", authMiddleware, requireAgentOrAdmin, async (req, res) => {
+  try {
+    const [tables] = await db.query("SHOW TABLES LIKE 'applications'");
+    if (!tables.length) {
+      return res.json({ applications: [], columns: [] });
+    }
+
+    const [columns] = await db.query("SHOW COLUMNS FROM applications");
+    const columnNames = columns.map((column) => column.Field);
+    const [rows] = await db.query("SELECT * FROM applications ORDER BY 1 DESC LIMIT 200");
+
+    return res.json({ applications: rows, columns: columnNames });
+  } catch (err) {
+    console.error("ADMIN APPLICATIONS ERROR:", err);
+    return res.status(500).json({ message: "Server error", details: err.message });
+  }
+});
+
+app.get("/api/admin/counseling-requests", authMiddleware, requireAgentOrAdmin, async (req, res) => {
+  try {
+    const [tables] = await db.query("SHOW TABLES LIKE 'counseling_requests'");
+    if (!tables.length) {
+      return res.json({ requests: [] });
+    }
+
+    const [rows] = await db.query("SELECT * FROM counseling_requests ORDER BY 1 DESC LIMIT 200");
+    return res.json({ requests: rows });
+  } catch (err) {
+    console.error("COUNSELING REQUESTS ERROR:", err);
+    return res.status(500).json({ message: "Server error", details: err.message });
+  }
+});
+
 app.get("/api/universities", async (req, res) => {
   try {
     const page = Math.max(1, Number(req.query.page || 1));
-    const limit = Math.max(1, Math.min(10, Number(req.query.limit || 10)));
+    const limit = Math.max(1, Math.min(200, Number(req.query.limit || 10)));
     const offset = (page - 1) * limit;
     const q = String(req.query.q || "").trim();
+    const country = String(req.query.country || "").trim();
 
-    const whereClause = q ? "WHERE name LIKE ? OR country LIKE ? OR city LIKE ?" : "";
-    const params = q ? [`%${q}%`, `%${q}%`, `%${q}%`] : [];
+    const filters = [];
+    const params = [];
+    if (country) {
+      filters.push("LOWER(country) LIKE LOWER(?)");
+      params.push(`%${country}%`);
+    }
+    if (q) {
+      filters.push("(name LIKE ? OR country LIKE ? OR city LIKE ?)");
+      params.push(`%${q}%`, `%${q}%`, `%${q}%`);
+    }
+    const whereClause = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
 
     const [[countRow]] = await db.query(
       `SELECT COUNT(*) AS total FROM universities ${whereClause}`,
@@ -654,7 +941,7 @@ app.get("/api/universities", async (req, res) => {
     const total = countRow.total || 0;
 
     const [rows] = await db.query(
-      `SELECT id, name, country, city, ranking, website, image_url
+      `SELECT id, name, country, city, ranking, website, image_url, fees, courses, scholarships
        FROM universities
        ${whereClause}
        ORDER BY ranking IS NULL, ranking ASC, name ASC
@@ -691,6 +978,183 @@ app.get("/api/universities/:id", async (req, res) => {
 });
 
 // ƒo. AGENT ADD UNIVERSITY
+const toNumber = (value) => {
+  if (value === null || value === undefined) return null;
+  const parsed = Number(String(value).trim());
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const firstCountry = (preferredCountries) => {
+  if (!preferredCountries) return null;
+  const parts = String(preferredCountries)
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return parts.length ? parts[0] : null;
+};
+
+const scholarshipTier = (score) => {
+  if (score >= 85) return { title: "High Merit Scholarship", coverage: "40% - 70% tuition waiver" };
+  if (score >= 65) return { title: "Merit Scholarship", coverage: "20% - 40% tuition waiver" };
+  if (score >= 45) return { title: "Admission Scholarship", coverage: "10% - 25% tuition support" };
+  return { title: "Application Grant", coverage: "Up to 10% tuition support" };
+};
+
+const parseFeeAmount = (feeText) => {
+  if (!feeText) return null;
+  const normalized = String(feeText).replace(/,/g, "");
+  const matches = normalized.match(/\d{4,6}(\.\d+)?/g);
+  if (!matches?.length) return null;
+  const largest = matches
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value))
+    .sort((a, b) => b - a)[0];
+  return largest || null;
+};
+
+app.get("/api/scholarships/recommended", authMiddleware, async (req, res) => {
+  try {
+    const [[academic]] = await db.query(
+      `SELECT gpa, ielts_score, toefl_score, gre_score, gmat_score, field_of_study
+       FROM user_academics
+       WHERE user_id = ?`,
+      [req.user.id]
+    );
+
+    const [[preferences]] = await db.query(
+      `SELECT degree_level, field_of_study, preferred_countries, annual_budget, preferred_intake
+       FROM user_preferences
+       WHERE user_id = ?`,
+      [req.user.id]
+    );
+
+    const country = firstCountry(preferences?.preferred_countries);
+    const whereClause = country ? "WHERE country LIKE ?" : "";
+    const queryParams = country ? [`%${country}%`] : [];
+
+    const [universities] = await db.query(
+      `SELECT id, name, country, city, ranking, website, image_url, scholarships, courses
+       FROM universities
+       ${whereClause}
+       ORDER BY ranking IS NULL, ranking ASC, name ASC
+       LIMIT 40`,
+      queryParams
+    );
+
+    const gpa = toNumber(academic?.gpa);
+    const ielts = toNumber(academic?.ielts_score);
+    const toefl = toNumber(academic?.toefl_score);
+    const gre = toNumber(academic?.gre_score);
+    const gmat = toNumber(academic?.gmat_score);
+
+    const scoreFromProfile =
+      (gpa !== null ? Math.min(40, (gpa / 4) * 40) : 0) +
+      (ielts !== null ? Math.min(20, (ielts / 9) * 20) : 0) +
+      (toefl !== null ? Math.min(20, (toefl / 120) * 20) : 0) +
+      (gre !== null ? Math.min(10, (gre / 340) * 10) : 0) +
+      (gmat !== null ? Math.min(10, (gmat / 800) * 10) : 0);
+
+    const preferredField = (preferences?.field_of_study || academic?.field_of_study || "").toLowerCase();
+
+    const recommendations = universities.map((uni) => {
+      const reasons = [];
+      let fitScore = 0;
+      const courseText = String(uni.courses || "").toLowerCase();
+      const countryText = String(uni.country || "").toLowerCase();
+      const feeAmount = parseFeeAmount(uni.fees);
+      const budget = toNumber(preferences?.annual_budget);
+
+      if (gpa !== null) {
+        const gpaScore = Math.min(32, (gpa / 4) * 32);
+        fitScore += gpaScore;
+        if (gpa >= 3.7) reasons.push("High GPA fit");
+        else if (gpa >= 3.2) reasons.push("Solid academic profile");
+      }
+
+      if (ielts !== null || toefl !== null) {
+        const languageScore =
+          (ielts !== null ? Math.min(16, (ielts / 9) * 16) : 0) +
+          (toefl !== null ? Math.min(16, (toefl / 120) * 16) : 0);
+        fitScore += Math.min(18, languageScore);
+
+        if (ielts !== null && ielts >= 7) reasons.push("Strong IELTS score");
+        if (toefl !== null && toefl >= 95) reasons.push("Strong TOEFL score");
+      }
+
+      if (gre !== null || gmat !== null) {
+        const examScore =
+          (gre !== null ? Math.min(8, (gre / 340) * 8) : 0) +
+          (gmat !== null ? Math.min(8, (gmat / 800) * 8) : 0);
+        fitScore += Math.min(10, examScore);
+
+        if (gre !== null && gre >= 315) reasons.push("Competitive GRE profile");
+        if (gmat !== null && gmat >= 650) reasons.push("Competitive GMAT profile");
+      }
+
+      if (preferredField && courseText.includes(preferredField)) {
+        fitScore += 14;
+        reasons.push("Intended subject match");
+      }
+
+      if (country && countryText.includes(String(country).toLowerCase())) {
+        fitScore += 10;
+        reasons.push("Country preference match");
+      }
+
+      if (budget !== null && feeAmount !== null) {
+        if (feeAmount <= budget) {
+          fitScore += 10;
+          reasons.push("Budget-compatible");
+        } else if (feeAmount <= budget * 1.2) {
+          fitScore += 4;
+          reasons.push("Slightly above budget but still possible");
+        }
+      }
+
+      const rankScore = uni.ranking ? Math.max(0, 16 - Math.min(16, Math.floor(uni.ranking / 10))) : 6;
+      fitScore += rankScore;
+      if (uni.ranking && uni.ranking <= 50) reasons.push("Highly ranked university");
+
+      fitScore += Math.min(8, scoreFromProfile * 0.08);
+      fitScore = Math.round(Math.min(100, fitScore));
+      const tier = scholarshipTier(fitScore);
+
+      return {
+        university_id: uni.id,
+        university_name: uni.name,
+        country: uni.country,
+        city: uni.city,
+        ranking: uni.ranking,
+        website: uni.website,
+        image_url: uni.image_url,
+        scholarship_name: tier.title,
+        estimated_coverage: tier.coverage,
+        fit_score: fitScore,
+        match_reasons: reasons.slice(0, 5),
+        annual_fee_estimate: feeAmount,
+        note: uni.scholarships || "Merit and need-based scholarships available.",
+      };
+    }).sort((a, b) => b.fit_score - a.fit_score || (a.ranking || 9999) - (b.ranking || 9999));
+
+    return res.json({
+      profile_used: {
+        degree_level: preferences?.degree_level || null,
+        field_of_study: preferences?.field_of_study || academic?.field_of_study || null,
+        preferred_countries: preferences?.preferred_countries || null,
+        annual_budget: preferences?.annual_budget || null,
+        gpa: academic?.gpa || null,
+        ielts_score: academic?.ielts_score || null,
+        toefl_score: academic?.toefl_score || null,
+        gre_score: academic?.gre_score || null,
+        gmat_score: academic?.gmat_score || null,
+      },
+      recommendations,
+    });
+  } catch (err) {
+    console.error("SCHOLARSHIP RECOMMENDATION ERROR:", err);
+    return res.status(500).json({ message: "Server error", details: err.message });
+  }
+});
 app.post("/api/agent/universities", authMiddleware, requireAgentOrAdmin, async (req, res) => {
   try {
     const {
@@ -1073,5 +1537,8 @@ app.delete("/api/profile/documents/:id", authMiddleware, async (req, res) => {
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, async () => {
   console.log(`Server running on http://localhost:${PORT}`);
+  await ensureSettingsTable();
   await seedUniversities();
 });
+
+

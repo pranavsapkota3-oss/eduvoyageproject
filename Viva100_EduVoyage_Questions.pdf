@@ -1,0 +1,271 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Count 3 /Kids [5 0 R 7 0 R 9 0 R] >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+4 0 obj
+<< /Length 3161 >>
+stream
+BT
+/F1 11 Tf
+50 800 Td
+14 TL
+(EduVoyage Viva - 100 Questions) Tj
+T*
+() Tj
+T*
+(Use these for project viva preparation.) Tj
+T*
+() Tj
+T*
+(1. Give a 1-minute overview of your EduVoyage project architecture \(frontend, backend, database\).) Tj
+T*
+(2. What is the main problem your website solves for students?) Tj
+T*
+(3. Why did you choose React for the frontend instead of plain HTML/CSS/JS?) Tj
+T*
+(4. Why did you choose Node.js + Express for backend APIs?) Tj
+T*
+(5. Why did you use MySQL/MariaDB for this project?) Tj
+T*
+(6. Explain your project folder structure and why it is organized that way.) Tj
+T*
+(7. How does the login flow work from UI to database verification?) Tj
+T*
+(8. What data do you store in localStorage after login, and why?) Tj
+T*
+(9. How do JWT tokens work in your project?) Tj
+T*
+(10. What causes 'Invalid token' in your app and how do you fix it?) Tj
+T*
+(11. Why is JWT_SECRET important in backend .env?) Tj
+T*
+(12. What is the difference between authentication and authorization in your app?) Tj
+T*
+(13. How do you restrict admin/agent pages based on role?) Tj
+T*
+(14. What roles exist in your website now?) Tj
+T*
+(15. How is role assignment handled from admin panel?) Tj
+T*
+(16. What can an agent do that a student cannot?) Tj
+T*
+(17. What can an admin do that an agent cannot?) Tj
+T*
+(18. How does signup OTP verification work in your implementation?) Tj
+T*
+(19. Why should user row be created only after OTP verification?) Tj
+T*
+(20. How do you prevent duplicate signup for same email?) Tj
+T*
+(21. How do you handle password hashing and why is it necessary?) Tj
+T*
+(22. Which hashing algorithm/library did you use and why?) Tj
+T*
+(23. How does forgot-password flow work end-to-end?) Tj
+T*
+(24. How is reset code/token expiry managed in database?) Tj
+T*
+(25. What security risks exist if reset tokens never expire?) Tj
+T*
+(26. How did you configure Nodemailer for Gmail app password?) Tj
+T*
+(27. Why does Gmail reject normal password with 535 error?) Tj
+T*
+(28. What are common CORS issues you faced and how did you resolve them?) Tj
+T*
+(29. What does 'Cannot GET /api/auth/login' mean technically?) Tj
+T*
+(30. Why do you get 404 on /api/profile/personal sometimes?) Tj
+T*
+(31. What does 'Missing token' response indicate?) Tj
+T*
+(32. How do you test API endpoints manually \(Postman/browser/Network tab\)?) Tj
+T*
+(33. How do you debug failed requests using browser DevTools Network panel?) Tj
+T*
+(34. How do you read request payload and response body in DevTools?) Tj
+T*
+(35. Why can CSP warnings appear in console even if app works?) Tj
+T*
+(36. Which console errors can be ignored and which are critical?) Tj
+T*
+(37. How did you design the complete profile multi-step UI?) Tj
+T*
+(38. What are the 5 profile steps and what data each step stores?) Tj
+T*
+(39. How is personal information saved to database?) Tj
+T*
+(40. How is academic background saved to database?) Tj
+T*
+(41. How is study preference saved to database?) Tj
+T*
+(42. How are uploaded documents stored and linked to user?) Tj
+T*
+(43. How do you serve uploaded files from backend static path?) Tj
+T*
+(44. Why did document preview fail initially and how did you fix it?) Tj
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 4 0 R >>
+endobj
+6 0 obj
+<< /Length 3218 >>
+stream
+BT
+/F1 11 Tf
+50 800 Td
+14 TL
+(45. How do foreign keys help in user_profiles/user_academics tables?) Tj
+T*
+(46. Why use ON DELETE CASCADE in your schema?) Tj
+T*
+(47. What happens if users table row is deleted?) Tj
+T*
+(48. How do you ensure one profile row per user \(PK/unique strategy\)?) Tj
+T*
+(49. How do you handle empty profile fields in API responses?) Tj
+T*
+(50. How does review/submit page combine data from all steps?) Tj
+T*
+(51. What should happen after profile submit and why?) Tj
+T*
+(52. How does your universities list page fetch paginated data?) Tj
+T*
+(53. Why did you keep fallback universities list in frontend?) Tj
+T*
+(54. What are the drawbacks of frontend fallback data?) Tj
+T*
+(55. How does search currently work in universities page?) Tj
+T*
+(56. How did you fix search so it finds results across all pages?) Tj
+T*
+(57. How does country filter API work for countries page?) Tj
+T*
+(58. Why did you create separate Countries page instead of only search?) Tj
+T*
+(59. How does university detail page load dynamic content by id?) Tj
+T*
+(60. What sections are shown on university detail page?) Tj
+T*
+(61. How do you handle missing university image_url?) Tj
+T*
+(62. How did you seed top universities data and why?) Tj
+T*
+(63. How do you preserve seeded universities when admin adds new ones?) Tj
+T*
+(64. How does admin add/edit/delete university work technically?) Tj
+T*
+(65. How did you improve add university form UI for better usability?) Tj
+T*
+(66. Why add dropdown suggestions/templates in admin form?) Tj
+T*
+(67. How do you avoid accidental deletion in admin panel?) Tj
+T*
+(68. How do you validate university form fields before submit?) Tj
+T*
+(69. What APIs power the scholarship finder page?) Tj
+T*
+(70. How do you calculate scholarship 'fit score'?) Tj
+T*
+(71. What student data is used for scholarship matching?) Tj
+T*
+(72. How could you improve scholarship recommendations in future?) Tj
+T*
+(73. How did you redesign scholarship UI to look more human-made?) Tj
+T*
+(74. How does expense tracker use selected university data?) Tj
+T*
+(75. How do you estimate tuition from university fee text?) Tj
+T*
+(76. How are suggested expenses generated by country?) Tj
+T*
+(77. How are expense records persisted per university?) Tj
+T*
+(78. What is the benefit of query param in /expense-tracker?) Tj
+T*
+(79. How did you connect 'Track Expenses' from university detail page?) Tj
+T*
+(80. What is the difference between component state and persisted storage?) Tj
+T*
+(81. Where do you use useEffect and why?) Tj
+T*
+(82. Where do you use useMemo and why?) Tj
+T*
+(83. How does React Router handle dynamic routes in your project?) Tj
+T*
+(84. What route guards/protected route approach did you implement?) Tj
+T*
+(85. How do you manage global auth state across pages?) Tj
+T*
+(86. How do you handle loading states in UI?) Tj
+T*
+(87. How do you handle error states in UI?) Tj
+T*
+(88. Give examples of friendly validation messages you added.) Tj
+T*
+(89. What backend logging helped you most during debugging?) Tj
+T*
+(90. How did you debug ETIMEDOUT database errors?) Tj
+T*
+(91. What caused Access denied DB errors and how did you troubleshoot?) Tj
+T*
+(92. What happened with Aria checksum errors in XAMPP and impact?) Tj
+ET
+endstream
+endobj
+7 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 6 0 R >>
+endobj
+8 0 obj
+<< /Length 599 >>
+stream
+BT
+/F1 11 Tf
+50 800 Td
+14 TL
+(93. How do you recover from MySQL service crash in XAMPP safely?) Tj
+T*
+(94. What SQL privileges are required for your app user?) Tj
+T*
+(95. Why should production never use root database user?) Tj
+T*
+(96. What environment variables are required for your backend?) Tj
+T*
+(97. How do you keep secrets safe in development and deployment?) Tj
+T*
+(98. What are your top 3 performance improvements for this project?) Tj
+T*
+(99. What are your top 3 security improvements for this project?) Tj
+T*
+(100. If you had one more week, what major feature would you add and why?) Tj
+ET
+endstream
+endobj
+9 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 8 0 R >>
+endobj
+xref
+0 10
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000127 00000 n 
+0000000197 00000 n 
+0000003410 00000 n 
+0000003536 00000 n 
+0000006806 00000 n 
+0000006932 00000 n 
+0000007582 00000 n 
+trailer
+<< /Size 10 /Root 1 0 R >>
+startxref
+7708
+%%EOF
