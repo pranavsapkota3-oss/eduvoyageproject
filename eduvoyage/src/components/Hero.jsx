@@ -1,15 +1,27 @@
 import { Link } from "react-router-dom";
 
 const trustMetrics = [
-  { value: "150+", label: "universities" },
-  { value: "4", label: "main destinations" },
-  { value: "Student", label: "planning first" },
+  { value: "150+", label: "universities tracked" },
+  { value: "4", label: "study destinations" },
+  { value: "Profile", label: "based matching" },
 ];
 
 const quickLinks = [
-  { label: "Explore countries", to: "/countries" },
-  { label: "Find scholarships", to: "/scholarships" },
-  { label: "Estimate expenses", to: "/expense-tracker" },
+  {
+    label: "Complete profile",
+    detail: "Add your scores, country preference, and budget first.",
+    to: "/profile",
+  },
+  {
+    label: "Find scholarships",
+    detail: "See matches based on your academic background.",
+    to: "/scholarships",
+  },
+  {
+    label: "Estimate expenses",
+    detail: "Check tuition, living cost, and income balance.",
+    to: "/expense-tracker",
+  },
 ];
 
 export default function Hero() {
@@ -18,14 +30,14 @@ export default function Hero() {
       <div className="hero-content hero-content--simple">
         <div className="hero-copy hero-copy--simple">
           <p className="hero-kicker">Study Abroad, Made Clearer</p>
-          <h1 className="hero-title">Find universities, compare costs, and plan your next step in one place.</h1>
+          <h1 className="hero-title">Plan your study-abroad shortlist, scholarships, and budget in one place.</h1>
           <p className="hero-subtitle">
-            Use EduVoyage to shortlist universities, check scholarships, and estimate your budget before you apply.
+            Start with your profile, compare realistic universities, then move into scholarship matching and expense planning without jumping between different tools.
           </p>
 
           <div className="hero-actions hero-actions--simple">
             <Link to="/universities" className="hero-btn hero-btn--primary">Browse Universities</Link>
-            <Link to="/signup" className="hero-btn hero-btn--secondary">Create Profile</Link>
+            <Link to="/profile" className="hero-btn hero-btn--secondary">Complete Profile</Link>
           </div>
 
           <div className="hero-trust-grid hero-trust-grid--simple">
@@ -40,15 +52,16 @@ export default function Hero() {
 
         <div className="hero-planner hero-planner--simple">
           <div className="hero-planner__head">
-            <span className="hero-planner__eyebrow">Start Here</span>
-            <h3>Pick one place to begin</h3>
-            <p>You do not need to fill everything at once. Start with the part you already know.</p>
+            <span className="hero-planner__eyebrow">Start With What You Know</span>
+            <h3>Choose your next step</h3>
+            <p>Pick the action that matches where you are right now, then move forward from there.</p>
           </div>
 
           <div className="hero-quick-links">
             {quickLinks.map((item) => (
               <Link key={item.label} to={item.to} className="hero-quick-links__item">
-                {item.label}
+                <strong>{item.label}</strong>
+                <span>{item.detail}</span>
               </Link>
             ))}
           </div>

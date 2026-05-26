@@ -4,71 +4,32 @@ import Navbar from "../components/Navbar";
 import Footer from "../components/Footer";
 import { getUniversityWebsiteUrl } from "../utils/universityLinks";
 
-const STORAGE_KEY = "expense_tracker_by_university_v1";
 const APPLICATION_STORAGE_KEY = "university_application_flow_v1";
 
-const COUNTRY_COST_GUIDES = {
-  USA: {
-    rent: [900, 1800],
-    food: [280, 520],
-    transport: [70, 180],
-    utilities: [120, 260],
-    insurance: [120, 260],
-    books: [60, 140],
-  },
-  UK: {
-    rent: [700, 1400],
-    food: [220, 420],
-    transport: [60, 160],
-    utilities: [110, 220],
-    insurance: [90, 180],
-    books: [50, 120],
-  },
-  Canada: {
-    rent: [750, 1500],
-    food: [240, 430],
-    transport: [65, 150],
-    utilities: [110, 220],
-    insurance: [90, 180],
-    books: [55, 120],
-  },
-  Australia: {
-    rent: [850, 1700],
-    food: [260, 460],
-    transport: [70, 170],
-    utilities: [120, 240],
-    insurance: [100, 190],
-    books: [60, 130],
-  },
-};
-
-const DEFAULT_GUIDE = {
-  rent: [700, 1400],
-  food: [220, 420],
-  transport: [60, 160],
-  utilities: [100, 210],
-  insurance: [90, 180],
-  books: [50, 120],
-};
+const STEP_KEYS = ["before-applying", "after-arriving", "monthly-plan", "expense-log", "compare"];
 
 const DEFAULT_PLAN = {
+  planner_stage: "before-applying",
+  has_arrived: "",
+  works_part_time: "",
+  weekly_income: "",
   application_fee: "",
   transcript_fee: "",
   english_test_fee: "",
   visa_fee: "",
   courier_fee: "",
   deposit_fee: "",
+  other_fee: "",
+  other_note: "",
   semester_fee: "",
   monthly_rent: "",
-  monthly_insurance: "",
   monthly_food: "",
   monthly_transport: "",
   monthly_utilities: "",
-  other_fee: "",
-  other_note: "",
+  monthly_insurance: "",
 };
 
-const ONE_TIME_FIELDS = [
+const BEFORE_APPLY_FIELDS = [
   ["Application fee", "application_fee"],
   ["Transcript fee", "transcript_fee"],
   ["English test fee", "english_test_fee"],
@@ -80,32 +41,39 @@ const ONE_TIME_FIELDS = [
 
 const MONTHLY_FIELDS = [
   ["Rent", "monthly_rent"],
-  ["Insurance", "monthly_insurance"],
   ["Food", "monthly_food"],
   ["Transport", "monthly_transport"],
   ["Utilities", "monthly_utilities"],
+  ["Insurance", "monthly_insurance"],
 ];
 
-function readJson(key, fallback) {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : fallback;
-  } catch {
-    return fallback;
-  }
-}
+const EXPENSE_CATEGORIES = [
+  "Application",
+  "Transcript",
+  "English Test",
+  "Visa",
+  "Courier",
+  "Deposit",
+  "Semester Fee",
+  "Rent",
+  "Food",
+  "Transport",
+  "Utilities",
+  "Insurance",
+  "Other",
+];
 
-function normalizeCountry(country = "") {
-  const value = country.toLowerCase();
-  if (value.includes("united states") || value === "usa") return "USA";
-  if (value.includes("united kingdom") || value === "uk") return "UK";
-  if (value.includes("canada")) return "Canada";
-  if (value.includes("australia")) return "Australia";
-  return country || "Other";
-}
+const INCOME_CATEGORIES = ["Part-time income", "Family support", "Scholarship", "Other"];
+
+const COUNTRY_COST_GUIDES = {
+  USA: { rent: 1350, food: 400, transport: 120, utilities: 180, insurance: 180 },
+  UK: { rent: 1050, food: 320, transport: 110, utilities: 150, insurance: 130 },
+  Canada: { rent: 1100, food: 340, transport: 115, utilities: 160, insurance: 140 },
+  Australia: { rent: 1250, food: 360, transport: 120, utilities: 170, insurance: 150 },
+};
 
 function parseAmount(value) {
-  if (value === null || value === undefined) return 0;
+  if (value === null || value === undefined || value === "") return 0;
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
   const cleaned = String(value).replace(/[^0-9.]/g, "");
   const parsed = Number.parseFloat(cleaned);
@@ -116,17 +84,28 @@ function parseFeeAmount(feeText) {
   if (!feeText) return 0;
   const matches = String(feeText).match(/\d[\d,]*(?:\.\d+)?/g);
   if (!matches?.length) return 0;
-  const values = matches.map((item) => parseAmount(item));
-  return Math.max(...values, 0);
+  return Math.max(...matches.map((item) => parseAmount(item)), 0);
 }
 
 function formatMoney(amount, currency = "USD") {
-  const safeAmount = Number.isFinite(amount) ? amount : 0;
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency,
     maximumFractionDigits: 0,
-  }).format(safeAmount);
+  }).format(Number.isFinite(amount) ? amount : 0);
+}
+
+function sumValues(values) {
+  return values.reduce((total, value) => total + parseAmount(value), 0);
+}
+
+function normalizeCountry(country = "") {
+  const value = String(country).toLowerCase();
+  if (value.includes("united states") || value === "usa") return "USA";
+  if (value.includes("united kingdom") || value === "uk") return "UK";
+  if (value.includes("canada")) return "Canada";
+  if (value.includes("australia")) return "Australia";
+  return "Other";
 }
 
 function getCurrencyByCountry(country) {
@@ -138,96 +117,136 @@ function getCurrencyByCountry(country) {
   return "USD";
 }
 
-function getCountryGuide(country) {
-  const normalized = normalizeCountry(country);
-  return COUNTRY_COST_GUIDES[normalized] || DEFAULT_GUIDE;
+function getGuide(country) {
+  return COUNTRY_COST_GUIDES[normalizeCountry(country)] || COUNTRY_COST_GUIDES.USA;
 }
 
-function getGuideMidpoint(range) {
-  return Math.round((range[0] + range[1]) / 2);
+function getDefaultExpenseMonth() {
+  return new Date().toISOString().slice(0, 7);
 }
 
-function buildDefaultMonthlyPlan(country) {
-  const guide = getCountryGuide(country);
-  return {
-    monthly_rent: getGuideMidpoint(guide.rent),
-    monthly_insurance: getGuideMidpoint(guide.insurance),
-    monthly_food: getGuideMidpoint(guide.food),
-    monthly_transport: getGuideMidpoint(guide.transport),
-    monthly_utilities: getGuideMidpoint(guide.utilities),
-  };
+function normalizePlannerStage(value) {
+  const current = String(value || "").trim().toLowerCase();
+  if (["before-applying", "after-arriving", "monthly-plan", "expense-log", "compare"].includes(current)) {
+    return current;
+  }
+  if (current === "applying") return "before-applying";
+  if (current === "arrived") return "after-arriving";
+  if (current === "living") return "monthly-plan";
+  return "before-applying";
 }
 
-function toStoredPlan(source, country) {
+function toStoredPlan(source = {}) {
   return {
     ...DEFAULT_PLAN,
-    ...buildDefaultMonthlyPlan(country),
     ...source,
+    planner_stage: normalizePlannerStage(source?.planner_stage),
+    has_arrived:
+      source?.has_arrived === true || source?.has_arrived === 1 || source?.has_arrived === "1" || source?.has_arrived === "yes"
+        ? "yes"
+        : source?.has_arrived === false || source?.has_arrived === 0 || source?.has_arrived === "0" || source?.has_arrived === "no"
+          ? "no"
+          : "",
+    works_part_time:
+      source?.works_part_time === true || source?.works_part_time === 1 || source?.works_part_time === "1" || source?.works_part_time === "yes"
+        ? "yes"
+        : source?.works_part_time === false || source?.works_part_time === 0 || source?.works_part_time === "0" || source?.works_part_time === "no"
+          ? "no"
+          : "",
   };
 }
 
-function sumValues(values) {
-  return values.reduce((total, value) => total + parseAmount(value), 0);
+function getLatestApplicationUniversityId() {
+  try {
+    const raw = localStorage.getItem(APPLICATION_STORAGE_KEY);
+    const all = raw ? JSON.parse(raw) : {};
+    const rankedEntries = Object.values(all)
+      .filter((item) => item?.university_id)
+      .sort((a, b) => {
+        const aPending = a?.pending_confirmation ? 1 : 0;
+        const bPending = b?.pending_confirmation ? 1 : 0;
+        if (aPending !== bPending) return bPending - aPending;
+        const aTime = new Date(a?.opened_apply_at || a?.confirmed_at || 0).getTime();
+        const bTime = new Date(b?.opened_apply_at || b?.confirmed_at || 0).getTime();
+        return bTime - aTime;
+      });
+
+    return rankedEntries[0] ? String(rankedEntries[0].university_id) : "";
+  } catch {
+    return "";
+  }
 }
 
-function getMonthlyLivingTotal(plan, country) {
-  const fallback = buildDefaultMonthlyPlan(country);
-  return sumValues(
-    MONTHLY_FIELDS.map(([, key]) => {
-      const planValue = parseAmount(plan?.[key]);
-      return planValue || fallback[key] || 0;
-    })
-  );
+function getPlannerEntryMonth(updatedAt) {
+  if (!updatedAt) return getDefaultExpenseMonth();
+  const parsed = new Date(updatedAt);
+  if (Number.isNaN(parsed.getTime())) return getDefaultExpenseMonth();
+  return parsed.toISOString().slice(0, 7);
 }
 
-function buildComparisonSnapshot(university) {
-  const annualTuition = parseFeeAmount(university?.fees);
-  const guide = getCountryGuide(university?.country);
-  const monthlyLiving = getGuideMidpoint(guide.rent)
-    + getGuideMidpoint(guide.food)
-    + getGuideMidpoint(guide.transport)
-    + getGuideMidpoint(guide.utilities)
-    + getGuideMidpoint(guide.insurance);
+function getPlannerEntries(plan, updatedAt) {
+  const plannerMonth = getPlannerEntryMonth(updatedAt);
+  const baseEntries = [
+    ...BEFORE_APPLY_FIELDS.map(([label, key]) => ({
+      label,
+      key,
+      category: label.replace(" fee", ""),
+      amount: parseAmount(plan[key]),
+      note: key === "other_fee" ? plan.other_note || "Saved from planner" : "Saved from planner",
+    })),
+    { label: "Semester fee", key: "semester_fee", category: "Semester Fee", amount: parseAmount(plan.semester_fee), note: "Saved from planner" },
+    ...MONTHLY_FIELDS.map(([label, key]) => ({
+      label,
+      key,
+      category: label,
+      amount: parseAmount(plan[key]),
+      note: "Saved from planner",
+    })),
+  ];
 
-  return {
-    annualTuition,
-    monthlyLiving,
-    yearlyLiving: monthlyLiving * 12,
-    totalYearOne: annualTuition + monthlyLiving * 12,
-  };
+  return baseEntries
+    .filter((entry) => entry.amount > 0)
+    .map((entry) => ({
+      id: `planner-${entry.key}`,
+      entry_type: "expense",
+      category: entry.category,
+      amount: entry.amount,
+      month: plannerMonth,
+      note: entry.note,
+      source: "planner",
+      created_at: updatedAt || null,
+    }));
 }
 
-function PlannerBarChart({ data, tone = "blue" }) {
-  const max = Math.max(...data.map((item) => item.value), 1);
-  return (
-    <div className={`planner-chart planner-chart--${tone}`}>
-      {data.map((item) => (
-        <div className="planner-chart__row" key={item.label}>
-          <div className="planner-chart__meta">
-            <span>{item.label}</span>
-            <strong>{item.display}</strong>
-          </div>
-          <div className="planner-chart__track">
-            <div
-              className="planner-chart__fill"
-              style={{ width: `${Math.max((item.value / max) * 100, item.value > 0 ? 10 : 0)}%` }}
-            />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
+function sortEntries(entries) {
+  return [...entries].sort((a, b) => {
+    const monthCompare = String(b.month || "").localeCompare(String(a.month || ""));
+    if (monthCompare !== 0) return monthCompare;
+    return new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime();
+  });
 }
 
 export default function ExpenseTracker() {
   const [searchParams] = useSearchParams();
+  const token = localStorage.getItem("token");
   const [universities, setUniversities] = useState([]);
   const [selectedUniversityId, setSelectedUniversityId] = useState("");
   const [compareUniversityId, setCompareUniversityId] = useState("");
-  const [expensesMap, setExpensesMap] = useState({});
+  const [activeStep, setActiveStep] = useState("before-applying");
   const [applicationFlowMap, setApplicationFlowMap] = useState({});
-  const [form, setForm] = useState({ category: "Rent", amount: "", month: "", note: "" });
+  const [expensesMap, setExpensesMap] = useState({});
   const [status, setStatus] = useState("");
+  const [statusKind, setStatusKind] = useState("");
+  const [isSavingPlan, setIsSavingPlan] = useState(false);
+  const [isSavingEntry, setIsSavingEntry] = useState(false);
+  const [editingExpenseId, setEditingExpenseId] = useState(null);
+  const [form, setForm] = useState({
+    entryType: "expense",
+    category: "Rent",
+    amount: "",
+    month: getDefaultExpenseMonth(),
+    note: "",
+  });
 
   useEffect(() => {
     const loadUniversities = async () => {
@@ -243,41 +262,77 @@ export default function ExpenseTracker() {
     };
 
     loadUniversities();
-    setExpensesMap(readJson(STORAGE_KEY, {}));
-    setApplicationFlowMap(readJson(APPLICATION_STORAGE_KEY, {}));
   }, []);
 
   useEffect(() => {
     if (!universities.length) return;
     const queryUniversityId = searchParams.get("university");
-    const defaultId = queryUniversityId || String(universities[0]?.id || "");
-    setSelectedUniversityId((prev) => prev || defaultId);
+    const storedUniversityId = getLatestApplicationUniversityId();
+    const resolvedUniversityId =
+      queryUniversityId
+      || (storedUniversityId && universities.some((item) => String(item.id) === storedUniversityId) ? storedUniversityId : "")
+      || String(universities[0]?.id || "");
+    setSelectedUniversityId((prev) => prev || resolvedUniversityId);
   }, [universities, searchParams]);
 
   useEffect(() => {
-    const source = searchParams.get("source");
-    const queryUniversityId = searchParams.get("university");
-    if (source !== "application" || !queryUniversityId) return;
+    const loadExpensePlans = async () => {
+      if (!token) {
+        setApplicationFlowMap({});
+        return;
+      }
 
-    const current = readJson(APPLICATION_STORAGE_KEY, {});
-    const entry = current[String(queryUniversityId)];
-    if (!entry) return;
+      try {
+        const res = await fetch("http://localhost:5000/api/expense-plans", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await res.json();
+        if (!res.ok) return;
 
-    const nextMap = {
-      ...current,
-      [String(queryUniversityId)]: {
-        ...entry,
-        applied: true,
-        pending_confirmation: false,
-        confirmed_at: new Date().toISOString(),
-        plan: toStoredPlan(entry.plan, entry.country),
-      },
+        const nextMap = (data.plans || []).reduce((acc, plan) => {
+          acc[String(plan.university_id)] = {
+            applied: !!plan.applied,
+            plan: toStoredPlan(plan),
+            updated_at: plan.updated_at || null,
+          };
+          return acc;
+        }, {});
+
+        setApplicationFlowMap(nextMap);
+      } catch {
+        setApplicationFlowMap({});
+      }
     };
 
-    setApplicationFlowMap(nextMap);
-    localStorage.setItem(APPLICATION_STORAGE_KEY, JSON.stringify(nextMap));
-    setStatus("Application confirmed. Add your university-related expenses below.");
-  }, [searchParams]);
+    loadExpensePlans();
+  }, [token]);
+
+  useEffect(() => {
+    const loadExpenseEntries = async () => {
+      if (!token || !selectedUniversityId) return;
+
+      try {
+        const params = new URLSearchParams({ university_id: String(selectedUniversityId) });
+        const res = await fetch(`http://localhost:5000/api/expense-entries?${params.toString()}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await res.json();
+        if (!res.ok) return;
+
+        setExpensesMap((prev) => ({
+          ...prev,
+          [String(selectedUniversityId)]: data.expenses || [],
+        }));
+      } catch {
+        setExpensesMap((prev) => ({
+          ...prev,
+          [String(selectedUniversityId)]: [],
+        }));
+      }
+    };
+
+    loadExpenseEntries();
+  }, [selectedUniversityId, token]);
 
   const selectedUniversity = useMemo(
     () => universities.find((item) => String(item.id) === String(selectedUniversityId)) || null,
@@ -289,576 +344,707 @@ export default function ExpenseTracker() {
     [compareUniversityId, universities]
   );
 
-  const selectedCountry = normalizeCountry(selectedUniversity?.country);
-  const currency = getCurrencyByCountry(selectedUniversity?.country);
-  const annualTuition = parseFeeAmount(selectedUniversity?.fees);
-  const currentExpenses = expensesMap[String(selectedUniversityId)] || [];
   const currentFlow = applicationFlowMap[String(selectedUniversityId)] || {};
-  const applicationPlan = toStoredPlan(currentFlow.plan, selectedUniversity?.country);
+  const plan = toStoredPlan(currentFlow.plan || {});
   const didApply = currentFlow.applied === true;
-
-  const countryRanges = useMemo(() => {
-    const guide = getCountryGuide(selectedUniversity?.country);
-    const totalMin = Object.values(guide).reduce((sum, [min]) => sum + min, 0);
-    const totalMax = Object.values(guide).reduce((sum, [, max]) => sum + max, 0);
-    return [
-      { label: "Rent", range: guide.rent },
-      { label: "Food", range: guide.food },
-      { label: "Transport", range: guide.transport },
-      { label: "Utilities", range: guide.utilities },
-      { label: "Insurance", range: guide.insurance },
-      { label: "Books", range: guide.books },
-      { label: "Total monthly range", range: [totalMin, totalMax] },
-    ];
-  }, [selectedUniversity?.country]);
-
-  const oneTimeCosts = useMemo(
-    () =>
-      ONE_TIME_FIELDS.map(([label, key]) => ({
-        label,
-        value: parseAmount(applicationPlan[key]),
-      })).filter((item) => item.value > 0),
-    [applicationPlan]
+  const selectedCurrency = getCurrencyByCountry(selectedUniversity?.country);
+  const weeklyIncome = parseAmount(plan.weekly_income);
+  const worksPartTime = plan.works_part_time === "yes";
+  const oneTimeTotal = sumValues(BEFORE_APPLY_FIELDS.map(([, key]) => plan[key]));
+  const monthlyLivingTotal = sumValues(MONTHLY_FIELDS.map(([, key]) => plan[key]));
+  const yearlyTuition = parseAmount(plan.semester_fee) * 2;
+  const estimatedYearOne = oneTimeTotal + yearlyTuition + monthlyLivingTotal * 12;
+  const currentEntries = expensesMap[String(selectedUniversityId)] || [];
+  const plannerEntries = useMemo(
+    () => getPlannerEntries(plan, currentFlow.updated_at),
+    [currentFlow.updated_at, plan]
   );
-
-  const preApplicationTotal = useMemo(
-    () => sumValues(oneTimeCosts.map((item) => item.value)),
-    [oneTimeCosts]
+  const allEntries = useMemo(
+    () => sortEntries([...plannerEntries, ...currentEntries]),
+    [currentEntries, plannerEntries]
   );
+  const spentSoFar = sumValues(allEntries.filter((entry) => entry.entry_type !== "income").map((entry) => entry.amount));
+  const moneyReceived = sumValues(currentEntries.filter((entry) => entry.entry_type === "income").map((entry) => entry.amount));
+  const monthlyIncome = weeklyIncome * 4;
+  const leftAmount = monthlyIncome + moneyReceived - spentSoFar;
+  const compareGuide = getGuide(compareUniversity?.country);
+  const compareTotal = compareUniversity
+    ? parseFeeAmount(compareUniversity.fees)
+      + (compareGuide.rent + compareGuide.food + compareGuide.transport + compareGuide.utilities + compareGuide.insurance) * 12
+    : 0;
+  const difference = compareUniversity ? estimatedYearOne - compareTotal : 0;
+  const comparisonAreas = compareUniversity
+    ? [
+        { label: "Tuition", value: yearlyTuition - parseFeeAmount(compareUniversity.fees) },
+        {
+          label: "Living cost",
+          value: monthlyLivingTotal * 12 - (compareGuide.rent + compareGuide.food + compareGuide.transport + compareGuide.utilities + compareGuide.insurance) * 12,
+        },
+        { label: "Before applying", value: oneTimeTotal },
+      ]
+    : [];
+  const mainDifference = comparisonAreas.length
+    ? comparisonAreas.reduce((best, current) => (Math.abs(current.value) > Math.abs(best.value) ? current : best), comparisonAreas[0])
+    : null;
 
-  const plannedMonthlyLiving = useMemo(
-    () => getMonthlyLivingTotal(applicationPlan, selectedUniversity?.country),
-    [applicationPlan, selectedUniversity?.country]
-  );
-
-  const semesterTuition = parseAmount(applicationPlan.semester_fee);
-  const tuitionYearTotal = semesterTuition > 0 ? semesterTuition * 2 : annualTuition;
-  const yearlyLivingTotal = plannedMonthlyLiving * 12;
-  const trackedActualTotal = sumValues(currentExpenses.map((item) => item.amount));
-  const yearOneEstimate = preApplicationTotal + tuitionYearTotal + yearlyLivingTotal;
-
-  const groupedSummary = [
-    {
-      label: "Pre-application costs",
-      amount: preApplicationTotal,
-      detail: "Application, transcript, visa, courier and deposit fees",
-    },
-    {
-      label: "Tuition costs",
-      amount: tuitionYearTotal,
-      detail: semesterTuition > 0 ? "Using semester fee plan x 2" : "Using current annual tuition estimate",
-    },
-    {
-      label: "Monthly living costs",
-      amount: plannedMonthlyLiving,
-      detail: "Rent, food, transport, utilities and insurance",
-    },
-    {
-      label: "Yearly total",
-      amount: yearOneEstimate,
-      detail: "Year-one estimate using tuition plus 12 months of living cost",
-    },
-  ];
-
-  const categoryBreakdown = useMemo(() => {
-    const bucket = {
-      Tuition: tuitionYearTotal,
-      Rent: parseAmount(applicationPlan.monthly_rent) || buildDefaultMonthlyPlan(selectedUniversity?.country).monthly_rent,
-      Food: parseAmount(applicationPlan.monthly_food) || buildDefaultMonthlyPlan(selectedUniversity?.country).monthly_food,
-      Transport:
-        parseAmount(applicationPlan.monthly_transport) || buildDefaultMonthlyPlan(selectedUniversity?.country).monthly_transport,
-      Utilities:
-        parseAmount(applicationPlan.monthly_utilities) || buildDefaultMonthlyPlan(selectedUniversity?.country).monthly_utilities,
-      Insurance:
-        parseAmount(applicationPlan.monthly_insurance) || buildDefaultMonthlyPlan(selectedUniversity?.country).monthly_insurance,
-      Application: preApplicationTotal,
-    };
-
-    currentExpenses.forEach((expense) => {
-      const key = expense.category || "Other";
-      bucket[key] = (bucket[key] || 0) + parseAmount(expense.amount);
+  useEffect(() => {
+    if (!selectedUniversityId) return;
+    const savedStep = normalizePlannerStage(currentFlow?.plan?.planner_stage);
+    setActiveStep((prev) => {
+      if (prev === "compare") return prev;
+      if (!didApply && prev !== "before-applying") return "before-applying";
+      return savedStep || "before-applying";
     });
+  }, [currentFlow?.plan?.planner_stage, didApply, selectedUniversityId]);
 
-    return Object.entries(bucket)
-      .map(([label, value]) => ({ label, value, display: formatMoney(value, currency) }))
-      .filter((item) => item.value > 0)
-      .sort((a, b) => b.value - a.value);
-  }, [applicationPlan, currentExpenses, currency, preApplicationTotal, selectedUniversity?.country, tuitionYearTotal]);
+  useEffect(() => {
+    setCompareUniversityId((prev) => (String(prev) === String(selectedUniversityId) ? "" : prev));
+  }, [selectedUniversityId]);
 
-  const monthlyEstimateChart = useMemo(() => {
-    const defaults = buildDefaultMonthlyPlan(selectedUniversity?.country);
-    return [
-      { label: "Rent", value: parseAmount(applicationPlan.monthly_rent) || defaults.monthly_rent },
-      { label: "Food", value: parseAmount(applicationPlan.monthly_food) || defaults.monthly_food },
-      { label: "Transport", value: parseAmount(applicationPlan.monthly_transport) || defaults.monthly_transport },
-      { label: "Utilities", value: parseAmount(applicationPlan.monthly_utilities) || defaults.monthly_utilities },
-      { label: "Insurance", value: parseAmount(applicationPlan.monthly_insurance) || defaults.monthly_insurance },
-    ].map((item) => ({
-      ...item,
-      display: formatMoney(item.value, currency),
-    }));
-  }, [applicationPlan, currency, selectedUniversity?.country]);
+  const ensureLoggedIn = () => {
+    if (token) return true;
+    setStatus("Login first to save expense data.");
+    setStatusKind("error");
+    return false;
+  };
 
-  const comparison = useMemo(() => {
-    if (!selectedUniversity || !compareUniversity) return null;
-    const left = buildComparisonSnapshot(selectedUniversity);
-    const right = buildComparisonSnapshot(compareUniversity);
-    return { left, right };
-  }, [compareUniversity, selectedUniversity]);
-
-  const handleSubmitExpense = (event) => {
-    event.preventDefault();
-    if (!selectedUniversityId || !form.amount || !form.month) {
-      setStatus("Choose a university and fill amount and month.");
-      return;
+  const syncApplicationStorage = (universityId, updates) => {
+    try {
+      const raw = localStorage.getItem(APPLICATION_STORAGE_KEY);
+      const all = raw ? JSON.parse(raw) : {};
+      const key = String(universityId);
+      if (!all[key]) return;
+      all[key] = { ...all[key], ...updates };
+      localStorage.setItem(APPLICATION_STORAGE_KEY, JSON.stringify(all));
+    } catch {
+      // ignore localStorage issues
     }
-
-    const nextExpense = {
-      id: Date.now(),
-      category: form.category,
-      amount: parseAmount(form.amount),
-      month: form.month,
-      note: form.note.trim(),
-      created_at: new Date().toISOString(),
-    };
-
-    const nextMap = {
-      ...expensesMap,
-      [String(selectedUniversityId)]: [nextExpense, ...(expensesMap[String(selectedUniversityId)] || [])],
-    };
-
-    setExpensesMap(nextMap);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(nextMap));
-    setForm({ category: "Rent", amount: "", month: "", note: "" });
-    setStatus("Expense recorded.");
   };
 
-  const deleteExpense = (expenseId) => {
-    const nextItems = currentExpenses.filter((item) => item.id !== expenseId);
-    const nextMap = { ...expensesMap, [String(selectedUniversityId)]: nextItems };
-    setExpensesMap(nextMap);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(nextMap));
-  };
-
-  const updateApplicationPlanField = (field, value) => {
-    const nextEntry = {
-      ...currentFlow,
-      plan: {
-        ...toStoredPlan(currentFlow.plan, selectedUniversity?.country),
-        [field]: value,
+  const updateLocalPlan = (patch) => {
+    const key = String(selectedUniversityId);
+    setApplicationFlowMap((prev) => ({
+      ...prev,
+      [key]: {
+        applied: prev[key]?.applied ?? false,
+        updated_at: prev[key]?.updated_at ?? null,
+        plan: {
+          ...toStoredPlan(prev[key]?.plan || {}),
+          ...patch,
+        },
       },
-    };
-    const nextMap = {
-      ...applicationFlowMap,
-      [String(selectedUniversityId)]: nextEntry,
-    };
-    setApplicationFlowMap(nextMap);
+    }));
   };
 
-  const saveApplicationPlan = () => {
-    localStorage.setItem(APPLICATION_STORAGE_KEY, JSON.stringify(applicationFlowMap));
-    setStatus("Application cost plan saved.");
+  const savePlan = async ({ nextStep, successMessage, appliedOverride } = {}) => {
+    if (!selectedUniversityId || !ensureLoggedIn()) return false;
+
+    const key = String(selectedUniversityId);
+    const current = applicationFlowMap[key] || {};
+    const applied = typeof appliedOverride === "boolean" ? appliedOverride : !!current.applied;
+    const planToSave = {
+      ...toStoredPlan(current.plan || {}),
+      planner_stage: nextStep || activeStep,
+    };
+
+    try {
+      setIsSavingPlan(true);
+      setStatus("");
+      setStatusKind("");
+      const res = await fetch(`http://localhost:5000/api/expense-plans/${selectedUniversityId}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          applied,
+          ...planToSave,
+        }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setStatus(data.message || "Could not save expense plan.");
+        setStatusKind("error");
+        return false;
+      }
+
+      setApplicationFlowMap((prev) => ({
+        ...prev,
+        [key]: {
+          applied,
+          updated_at: data.plan?.updated_at || new Date().toISOString(),
+          plan: toStoredPlan(data.plan || planToSave),
+        },
+      }));
+
+      syncApplicationStorage(selectedUniversityId, {
+        confirmed_applied: applied,
+        pending_confirmation: false,
+        confirmed_at: new Date().toISOString(),
+      });
+
+      if (nextStep) {
+        setActiveStep(nextStep);
+      }
+
+      if (successMessage) {
+        setStatus(successMessage);
+        setStatusKind("success");
+      }
+
+      return true;
+    } catch {
+      setStatus("Could not save expense plan.");
+      setStatusKind("error");
+      return false;
+    } finally {
+      setIsSavingPlan(false);
+    }
   };
 
-  const setAppliedState = (applied) => {
-    const nextMap = {
-      ...applicationFlowMap,
+  const handleAppliedChoice = async (value) => {
+    if (!selectedUniversityId || !ensureLoggedIn()) return;
+    const applied = value === "yes";
+    updateLocalPlan({});
+    setApplicationFlowMap((prev) => ({
+      ...prev,
       [String(selectedUniversityId)]: {
-        ...currentFlow,
         applied,
-        plan: toStoredPlan(currentFlow.plan, selectedUniversity?.country),
+        updated_at: prev[String(selectedUniversityId)]?.updated_at || null,
+        plan: toStoredPlan(prev[String(selectedUniversityId)]?.plan || {}),
       },
-    };
-    setApplicationFlowMap(nextMap);
-    localStorage.setItem(APPLICATION_STORAGE_KEY, JSON.stringify(nextMap));
+    }));
+    if (!applied) {
+      setActiveStep("before-applying");
+    }
+    await savePlan({
+      appliedOverride: applied,
+      nextStep: applied ? normalizePlannerStage(plan.planner_stage) : "before-applying",
+      successMessage: applied ? "Application confirmed. Continue through the steps below." : "Application status saved. Start from before applying.",
+    });
+  };
+
+  const handlePlanFieldChange = (key, value) => {
+    updateLocalPlan({ [key]: value });
+  };
+
+  const resetEntryForm = () => {
+    setEditingExpenseId(null);
+    setForm({
+      entryType: "expense",
+      category: "Rent",
+      amount: "",
+      month: getDefaultExpenseMonth(),
+      note: "",
+    });
+  };
+
+  const handleSubmitEntry = async (event) => {
+    event.preventDefault();
+    if (!selectedUniversityId || !ensureLoggedIn()) return;
+
+    const endpoint = editingExpenseId
+      ? `http://localhost:5000/api/expense-entries/${editingExpenseId}`
+      : "http://localhost:5000/api/expense-entries";
+    const method = editingExpenseId ? "PUT" : "POST";
+
+    try {
+      setIsSavingEntry(true);
+      setStatus("");
+      setStatusKind("");
+      const res = await fetch(endpoint, {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          university_id: selectedUniversityId,
+          entry_type: form.entryType,
+          category: form.category,
+          amount: form.amount,
+          month: form.month,
+          note: form.note,
+        }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setStatus(data.message || "Could not save record.");
+        setStatusKind("error");
+        return;
+      }
+
+      setExpensesMap((prev) => {
+        const current = prev[String(selectedUniversityId)] || [];
+        const nextItems = editingExpenseId
+          ? current.map((item) => (item.id === editingExpenseId ? data.expense : item))
+          : [data.expense, ...current];
+        return {
+          ...prev,
+          [String(selectedUniversityId)]: nextItems,
+        };
+      });
+      resetEntryForm();
+      setStatus(editingExpenseId ? "Record updated." : "Record saved.");
+      setStatusKind("success");
+    } catch {
+      setStatus("Could not save record.");
+      setStatusKind("error");
+    } finally {
+      setIsSavingEntry(false);
+    }
+  };
+
+  const startEditing = (entry) => {
+    setEditingExpenseId(entry.id);
+    setForm({
+      entryType: entry.entry_type === "income" ? "income" : "expense",
+      category: entry.category || "Rent",
+      amount: String(entry.amount || ""),
+      month: entry.month || getDefaultExpenseMonth(),
+      note: entry.note || "",
+    });
+    setActiveStep("expense-log");
+  };
+
+  const deleteEntry = async (entryId) => {
+    if (!ensureLoggedIn()) return;
+
+    try {
+      const res = await fetch(`http://localhost:5000/api/expense-entries/${entryId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setStatus(data.message || "Could not delete record.");
+        setStatusKind("error");
+        return;
+      }
+
+      setExpensesMap((prev) => ({
+        ...prev,
+        [String(selectedUniversityId)]: (prev[String(selectedUniversityId)] || []).filter((entry) => entry.id !== entryId),
+      }));
+      setStatus("Record deleted.");
+      setStatusKind("success");
+    } catch {
+      setStatus("Could not delete record.");
+      setStatusKind("error");
+    }
   };
 
   const exportReport = () => {
     if (!selectedUniversity) return;
 
     const lines = [
-      `EduVoyage Expense Report`,
-      ``,
-      `University: ${selectedUniversity.name}`,
-      `Country: ${selectedUniversity.country || "-"}`,
-      `City: ${selectedUniversity.city || "-"}`,
-      `Tuition: ${selectedUniversity.fees || "Not available"}`,
-      ``,
-      `Grouped Summary`,
-      ...groupedSummary.map((item) => `- ${item.label}: ${formatMoney(item.amount, currency)} (${item.detail})`),
-      ``,
-      `Country-Based Monthly Ranges`,
-      ...countryRanges.map((item) => `- ${item.label}: ${formatMoney(item.range[0], currency)} to ${formatMoney(item.range[1], currency)}`),
-      ``,
-      `Recorded Expenses`,
-      ...(currentExpenses.length
-        ? currentExpenses.map(
-            (item) => `- ${item.month}: ${item.category} ${formatMoney(item.amount, currency)}${item.note ? ` | ${item.note}` : ""}`
-          )
-        : ["- No recorded expenses yet."]),
+      `Expense Tracker Report - ${selectedUniversity.name}`,
+      `Estimated year-one cost: ${formatMoney(estimatedYearOne, selectedCurrency)}`,
+      `Monthly living cost: ${formatMoney(monthlyLivingTotal, selectedCurrency)}`,
+      `Weekly income: ${weeklyIncome ? formatMoney(weeklyIncome, selectedCurrency) : "Not added"}`,
+      `Spent so far: ${formatMoney(spentSoFar, selectedCurrency)}`,
+      `Money received: ${formatMoney(moneyReceived, selectedCurrency)}`,
+      `Left: ${formatMoney(leftAmount, selectedCurrency)}`,
+      "",
+      "Expense log:",
+      ...allEntries.map((entry) => `${entry.month} - ${entry.category} - ${formatMoney(parseAmount(entry.amount), selectedCurrency)}${entry.entry_type === "income" ? " (Money received)" : ""}${entry.note ? ` - ${entry.note}` : ""}`),
     ];
 
     const blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `${selectedUniversity.name.replace(/[^a-z0-9]+/gi, "_").toLowerCase()}_expense_report.txt`;
+    link.download = `${selectedUniversity.name.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}-expense-report.txt`;
+    document.body.appendChild(link);
     link.click();
+    document.body.removeChild(link);
     URL.revokeObjectURL(url);
   };
+
+  const topSummaryCards = [
+    {
+      label: "Estimated year-one cost",
+      value: formatMoney(estimatedYearOne, selectedCurrency),
+      note: "Upfront, tuition, and 12 months of living cost.",
+    },
+    {
+      label: "Monthly living cost",
+      value: formatMoney(monthlyLivingTotal, selectedCurrency),
+      note: "Rent, food, transport, utilities, and insurance.",
+    },
+    {
+      label: "Your weekly income",
+      value: weeklyIncome ? formatMoney(weeklyIncome, selectedCurrency) : "Not added",
+      note: worksPartTime ? "Based on your current part-time work entry." : "Add this after arriving if you work.",
+    },
+    {
+      label: "Income vs expense",
+      value: monthlyIncome || moneyReceived || spentSoFar ? formatMoney(leftAmount, selectedCurrency) : "No income added",
+      note:
+        !(monthlyIncome || moneyReceived)
+          ? "Add weekly income or money received to see your balance."
+          : leftAmount < 0
+            ? `You're in loss by ${formatMoney(Math.abs(leftAmount), selectedCurrency)}.`
+            : `You're in profit by ${formatMoney(leftAmount, selectedCurrency)}.`,
+    },
+  ];
+
+  const compareInsight = compareUniversity
+    ? difference === 0
+      ? "Both universities currently look equal on the year-one estimate."
+      : `${selectedUniversity?.name || "This university"} is ${difference > 0 ? "more expensive" : "cheaper"} than ${compareUniversity.name} by ${formatMoney(Math.abs(difference), selectedCurrency)}. Main difference: ${mainDifference?.label || "overall total"}.`
+    : "";
+
+  const stepDisabled = (step) => !didApply && ["after-arriving", "monthly-plan", "expense-log"].includes(step);
+  const currentEntryCategories = form.entryType === "income" ? INCOME_CATEGORIES : EXPENSE_CATEGORIES;
 
   return (
     <>
       <Navbar />
-      <main className="expense-page">
-        <section className="expense-hero">
+      <main className="expense-final-page">
+        <section className="expense-final-hero">
           <div>
-            <h1>Expense Planner</h1>
-            <p>Plan year-one costs, compare university budgets, and keep a running record of every study-abroad expense.</p>
-
-            <div className="expense-university-select">
-              <label htmlFor="expense-university">Choose your primary university</label>
-              <select
-                id="expense-university"
-                value={selectedUniversityId}
-                onChange={(event) => setSelectedUniversityId(event.target.value)}
-              >
-                {universities.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <p className="expense-final-hero__eyebrow">Expense tracker</p>
+            <h1>{selectedUniversity ? selectedUniversity.name : "Choose a university"}</h1>
+            <p>
+              {selectedUniversity
+                ? `${selectedUniversity.city || ""}${selectedUniversity.city && selectedUniversity.country ? ", " : ""}${selectedUniversity.country || ""}`
+                : "Select one university and track the whole cost flow step by step."}
+            </p>
           </div>
-
-          <div className="expense-hero__totals">
-            <div className="expense-hero__total">
-              <span>Year-one estimate</span>
-              <strong>{formatMoney(yearOneEstimate, currency)}</strong>
-            </div>
-            <div className="expense-hero__total expense-hero__total--secondary">
-              <span>Tracked spend</span>
-              <strong>{formatMoney(trackedActualTotal, currency)}</strong>
-            </div>
+          <div className="expense-final-hero__actions">
+            <select value={selectedUniversityId} onChange={(event) => setSelectedUniversityId(event.target.value)}>
+              {universities.map((university) => (
+                <option key={university.id} value={university.id}>
+                  {university.name}
+                </option>
+              ))}
+            </select>
+            {selectedUniversity && (
+              <>
+                <Link to={`/universities/${selectedUniversity.id}`} className="expense-final-link">
+                  View university
+                </Link>
+                {getUniversityWebsiteUrl(selectedUniversity) && (
+                  <a className="expense-final-link expense-final-link--ghost" href={getUniversityWebsiteUrl(selectedUniversity)} target="_blank" rel="noreferrer">
+                    Visit website
+                  </a>
+                )}
+              </>
+            )}
           </div>
         </section>
 
-        {selectedUniversity && (
+        <section className="expense-final-apply">
+          <div>
+            <span>Did you apply to this university?</span>
+            <p>Keep this updated so the later steps open at the right time.</p>
+          </div>
+          <div className="expense-final-choice">
+            <button
+              type="button"
+              className={didApply ? "expense-final-choice__btn expense-final-choice__btn--active" : "expense-final-choice__btn"}
+              onClick={() => handleAppliedChoice("yes")}
+            >
+              Yes
+            </button>
+            <button
+              type="button"
+              className={!didApply ? "expense-final-choice__btn expense-final-choice__btn--active" : "expense-final-choice__btn"}
+              onClick={() => handleAppliedChoice("no")}
+            >
+              No
+            </button>
+          </div>
+        </section>
+
+        {status && <p className={`settings-state ${statusKind === "success" ? "settings-state--success" : "settings-state--error"}`}>{status}</p>}
+
+        <section className="expense-final-summary">
+          {topSummaryCards.map((card) => (
+            <article key={card.label} className="expense-final-summary__card">
+              <span>{card.label}</span>
+              <strong>{card.value}</strong>
+              <p>{card.note}</p>
+            </article>
+          ))}
+        </section>
+
+        <section className="expense-final-steps">
+          {STEP_KEYS.map((step) => (
+            <button
+              key={step}
+              type="button"
+              className={activeStep === step ? "expense-final-step expense-final-step--active" : "expense-final-step"}
+              disabled={stepDisabled(step)}
+              onClick={() => setActiveStep(step)}
+            >
+              {step === "before-applying" && "Before applying"}
+              {step === "after-arriving" && "After arriving"}
+              {step === "monthly-plan" && "Monthly plan"}
+              {step === "expense-log" && "Expense log"}
+              {step === "compare" && "Compare"}
+            </button>
+          ))}
+        </section>
+
+        {activeStep === "before-applying" && (
+          <section className="expense-final-card">
+            <div className="expense-final-card__head">
+              <span>Step 1</span>
+              <h2>Before applying</h2>
+              <p>Only add the one-time costs you expect before or during the application process.</p>
+            </div>
+            <div className="expense-final-grid">
+              {BEFORE_APPLY_FIELDS.map(([label, key]) => (
+                <label key={key}>
+                  <span>{label}</span>
+                  <input type="number" min="0" value={plan[key]} onChange={(event) => handlePlanFieldChange(key, event.target.value)} />
+                </label>
+              ))}
+              <label className="expense-final-grid__wide">
+                <span>Other fee note</span>
+                <input type="text" value={plan.other_note} placeholder="Optional note" onChange={(event) => handlePlanFieldChange("other_note", event.target.value)} />
+              </label>
+            </div>
+            <div className="expense-final-actions">
+              <button type="button" className="expense-final-primary" onClick={() => savePlan({ nextStep: didApply ? "after-arriving" : "before-applying", successMessage: didApply ? "Before applying costs saved." : "Before applying costs saved. Mark the university as applied when you move to the next step." })}>
+                {isSavingPlan ? "Saving..." : "Save and continue"}
+              </button>
+            </div>
+          </section>
+        )}
+
+        {activeStep === "after-arriving" && (
+          <section className="expense-final-card">
+            <div className="expense-final-card__head">
+              <span>Step 2</span>
+              <h2>After arriving</h2>
+              <p>Answer these simple arrival questions before you move to monthly costs.</p>
+            </div>
+            <div className="expense-final-grid expense-final-grid--compact">
+              <label>
+                <span>Have you arrived?</span>
+                <select value={plan.has_arrived} onChange={(event) => handlePlanFieldChange("has_arrived", event.target.value)}>
+                  <option value="">Select</option>
+                  <option value="yes">Yes</option>
+                  <option value="no">No</option>
+                </select>
+              </label>
+              <label>
+                <span>Do you work?</span>
+                <select value={plan.works_part_time} onChange={(event) => handlePlanFieldChange("works_part_time", event.target.value)}>
+                  <option value="">Select</option>
+                  <option value="yes">Yes</option>
+                  <option value="no">No</option>
+                </select>
+              </label>
+              {plan.works_part_time === "yes" && (
+                <label>
+                  <span>Weekly income</span>
+                  <input type="number" min="0" value={plan.weekly_income} onChange={(event) => handlePlanFieldChange("weekly_income", event.target.value)} />
+                </label>
+              )}
+            </div>
+            <div className="expense-final-actions">
+              <button type="button" className="expense-final-secondary" onClick={() => setActiveStep("before-applying")}>
+                Back
+              </button>
+              <button type="button" className="expense-final-primary" onClick={() => savePlan({ nextStep: "monthly-plan", successMessage: "Arrival details saved." })}>
+                {isSavingPlan ? "Saving..." : "Save and continue"}
+              </button>
+            </div>
+          </section>
+        )}
+
+        {activeStep === "monthly-plan" && (
+          <section className="expense-final-card">
+            <div className="expense-final-card__head">
+              <span>Step 3</span>
+              <h2>Monthly living + tuition</h2>
+              <p>Add semester fee and simple monthly costs only.</p>
+            </div>
+            <div className="expense-final-grid">
+              <label>
+                <span>Semester fee</span>
+                <input type="number" min="0" value={plan.semester_fee} onChange={(event) => handlePlanFieldChange("semester_fee", event.target.value)} />
+              </label>
+              {MONTHLY_FIELDS.map(([label, key]) => (
+                <label key={key}>
+                  <span>{label}</span>
+                  <input type="number" min="0" value={plan[key]} onChange={(event) => handlePlanFieldChange(key, event.target.value)} />
+                </label>
+              ))}
+            </div>
+            <div className="expense-final-actions">
+              <button type="button" className="expense-final-secondary" onClick={() => setActiveStep("after-arriving")}>
+                Back
+              </button>
+              <button type="button" className="expense-final-primary" onClick={() => savePlan({ nextStep: "expense-log", successMessage: "Monthly plan saved." })}>
+                {isSavingPlan ? "Saving..." : "Save all expenses"}
+              </button>
+            </div>
+          </section>
+        )}
+
+        {activeStep === "expense-log" && (
           <>
-            <section className="expense-card expense-university-info">
-              <h2>{selectedUniversity.name}</h2>
-              <p>Use this planner to map application costs, tuition, monthly living expenses, and yearly budget before you apply.</p>
-              <div className="expense-university-info__meta">
-                <div>
-                  <span>Location</span>
-                  <strong>{selectedUniversity.city || "-"}, {selectedUniversity.country || "-"}</strong>
-                </div>
-                <div>
-                  <span>Tuition range</span>
-                  <strong>{selectedUniversity.fees || "Contact university"}</strong>
-                </div>
-                <div>
-                  <span>Official website</span>
-                  <strong>
-                    <a href={getUniversityWebsiteUrl(selectedUniversity)} target="_blank" rel="noreferrer">
-                      Visit university site
-                    </a>
-                  </strong>
-                </div>
+            <section className="expense-final-card">
+              <div className="expense-final-card__head">
+                <span>Step 4</span>
+                <h2>Expense log</h2>
+                <p>Add real expense rows or money received entries here.</p>
+              </div>
+
+              <div className="expense-final-record-summary">
+                <article className="expense-final-record-summary__card">
+                  <span>Spent so far</span>
+                  <strong>{formatMoney(spentSoFar, selectedCurrency)}</strong>
+                  <p>Total of all expense rows shown below.</p>
+                </article>
+                <article className="expense-final-record-summary__card">
+                  <span>Money received</span>
+                  <strong>{formatMoney(moneyReceived, selectedCurrency)}</strong>
+                  <p>Total of the money received entries from the log.</p>
+                </article>
+                <article className="expense-final-record-summary__card">
+                  <span>Left</span>
+                  <strong>{monthlyIncome || moneyReceived ? formatMoney(leftAmount, selectedCurrency) : "No income added"}</strong>
+                  <p>{leftAmount < 0 ? `You're in loss by ${formatMoney(Math.abs(leftAmount), selectedCurrency)}.` : "Money left after weekly income and received money."}</p>
+                </article>
+              </div>
+
+              <form className="expense-final-entry-form" onSubmit={handleSubmitEntry}>
+                <select value={form.entryType} onChange={(event) => setForm((prev) => ({ ...prev, entryType: event.target.value, category: event.target.value === "income" ? INCOME_CATEGORIES[0] : EXPENSE_CATEGORIES[0] }))}>
+                  <option value="expense">Expense</option>
+                  <option value="income">Money received</option>
+                </select>
+                <select value={form.category} onChange={(event) => setForm((prev) => ({ ...prev, category: event.target.value }))}>
+                  {currentEntryCategories.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+                <input type="number" min="0" placeholder="Amount" value={form.amount} onChange={(event) => setForm((prev) => ({ ...prev, amount: event.target.value }))} />
+                <input type="month" value={form.month} onChange={(event) => setForm((prev) => ({ ...prev, month: event.target.value }))} />
+                <input type="text" placeholder="Note" value={form.note} onChange={(event) => setForm((prev) => ({ ...prev, note: event.target.value }))} />
+                <button type="submit" className="expense-final-primary">
+                  {isSavingEntry ? "Saving..." : editingExpenseId ? "Update" : "Save"}
+                </button>
+              </form>
+
+              <div className="expense-final-actions expense-final-actions--inline">
+                {editingExpenseId && (
+                  <button type="button" className="expense-final-secondary" onClick={resetEntryForm}>
+                    Cancel edit
+                  </button>
+                )}
+                <button type="button" className="expense-final-secondary" onClick={exportReport}>
+                  Download report
+                </button>
               </div>
             </section>
 
-            {status && <p className="expense-status">{status}</p>}
-
-            <section className="expense-card expense-application-flow">
-              <div className="expense-application-flow__head">
-                <div>
-                  <h2>Pre-application planning</h2>
-                  <p>
-                    {didApply
-                      ? "Track one-time application charges first, then add semester and monthly living costs."
-                      : "Since you are still applying, start with IELTS, transcript, application, courier, visa, and deposit costs first."}
-                  </p>
-                </div>
-                <Link className="expense-apply-link" to={`/universities/${selectedUniversity.id}`}>
-                  Back to university details
-                </Link>
+            <section className="expense-final-card">
+              <div className="expense-final-card__head">
+                <span>Recorded entries</span>
+                <h2>Expense log list</h2>
+                <p>Planner-saved rows appear here too so you can see the full picture in one place.</p>
               </div>
-
-              <div className="expense-apply-prompt">
-                <p>Did you already apply to {selectedUniversity.name}?</p>
-                <div className="expense-apply-prompt__actions">
-                  <button type="button" onClick={() => setAppliedState(true)}>Yes</button>
-                  <button type="button" className="expense-apply-prompt__ghost" onClick={() => setAppliedState(false)}>
-                    Not yet
-                  </button>
+              {allEntries.length ? (
+                <div className="expense-final-log">
+                  {allEntries.map((entry) => (
+                    <article key={entry.id} className="expense-final-log__item">
+                      <div>
+                        <strong>
+                          {entry.month} - {entry.category}
+                          {entry.entry_type === "income" ? " (Money received)" : ""}
+                        </strong>
+                        <p>{formatMoney(parseAmount(entry.amount), selectedCurrency)}{entry.note ? ` | ${entry.note}` : ""}</p>
+                      </div>
+                      <div className="expense-final-log__actions">
+                        {entry.source === "planner" ? (
+                          <button type="button" className="expense-final-secondary" onClick={() => setActiveStep(entry.category === "Semester Fee" || MONTHLY_FIELDS.some(([label]) => label === entry.category) ? "monthly-plan" : "before-applying")}>
+                            Edit in planner
+                          </button>
+                        ) : (
+                          <>
+                            <button type="button" className="expense-final-secondary" onClick={() => startEditing(entry)}>
+                              Edit
+                            </button>
+                            <button type="button" className="expense-final-danger" onClick={() => deleteEntry(entry.id)}>
+                              Delete
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </article>
+                  ))}
                 </div>
-              </div>
-
-              {didApply && (
-                <div className="expense-application-form">
-                  <div className="expense-application-form__intro">
-                    <strong>Now add the actual expenses for this university.</strong>
-                    <p>Include application costs first, then semester fee, rent, food, insurance, transport, and utilities.</p>
-                  </div>
-                  <div className="expense-application-grid">
-                    {ONE_TIME_FIELDS.map(([label, key]) => (
-                      <label key={key}>
-                        <span>{label}</span>
-                        <input
-                          type="number"
-                          min="0"
-                          value={applicationPlan[key]}
-                          onChange={(event) => updateApplicationPlanField(key, event.target.value)}
-                        />
-                      </label>
-                    ))}
-
-                    <label>
-                      <span>Semester fee</span>
-                      <input
-                        type="number"
-                        min="0"
-                        value={applicationPlan.semester_fee}
-                        onChange={(event) => updateApplicationPlanField("semester_fee", event.target.value)}
-                      />
-                    </label>
-
-                    {MONTHLY_FIELDS.map(([label, key]) => (
-                      <label key={key}>
-                        <span>{label}</span>
-                        <input
-                          type="number"
-                          min="0"
-                          value={applicationPlan[key]}
-                          onChange={(event) => updateApplicationPlanField(key, event.target.value)}
-                        />
-                      </label>
-                    ))}
-
-                    <label className="expense-application-grid__wide">
-                      <span>Other fee note</span>
-                      <input
-                        type="text"
-                        value={applicationPlan.other_note}
-                        onChange={(event) => updateApplicationPlanField("other_note", event.target.value)}
-                        placeholder="Optional note for misc. fee"
-                      />
-                    </label>
-                  </div>
-
-                  <button type="button" className="expense-application-save" onClick={saveApplicationPlan}>
-                    Save planning data
-                  </button>
+              ) : (
+                <div className="expense-final-empty">
+                  <p>No entries recorded yet.</p>
+                  <span>Save the planner steps or add a manual entry above.</span>
                 </div>
               )}
             </section>
-
-            <section className="expense-layout expense-layout--planning">
-              <article className="expense-card">
-                <div className="expense-section-head">
-                  <span>Budget map</span>
-                  <h2>Grouped cost sections</h2>
-                </div>
-                {didApply ? (
-                  <div className="expense-summary-grid">
-                    {groupedSummary.map((item) => (
-                      <div key={item.label} className="expense-summary-card">
-                        <span>{item.label}</span>
-                        <strong>
-                          {item.label === "Monthly living costs"
-                            ? `${formatMoney(item.amount, currency)}/month`
-                            : formatMoney(item.amount, currency)}
-                        </strong>
-                        <p>{item.detail}</p>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="expense-stage-card">
-                    <span>Current stage</span>
-                    <strong>You are still in the application stage.</strong>
-                    <p>Monthly living costs will make more sense after you confirm the application. For now, focus on IELTS, transcript, application, courier, and visa-related spending.</p>
-                  </div>
-                )}
-              </article>
-
-              <article className="expense-card">
-                <div className="expense-section-head">
-                  <span>Suggested ranges</span>
-                  <h2>{didApply ? `${selectedCountry} monthly living guide` : `${selectedCountry} early planning guide`}</h2>
-                </div>
-                <div className="expense-range-list">
-                  {(didApply ? countryRanges : countryRanges.slice(0, 3)).map((item) => (
-                    <div key={item.label} className="expense-range-row">
-                      <strong>{item.label}</strong>
-                      <span>
-                        {formatMoney(item.range[0], currency)} - {formatMoney(item.range[1], currency)}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </article>
-            </section>
-
-            {didApply ? (
-              <section className="expense-layout">
-                <article className="expense-card">
-                  <div className="expense-section-head">
-                    <span>Planner charts</span>
-                    <h2>Category breakdown</h2>
-                  </div>
-                  <PlannerBarChart data={categoryBreakdown.slice(0, 8)} />
-                </article>
-
-                <article className="expense-card">
-                  <div className="expense-section-head">
-                    <span>Monthly estimate</span>
-                    <h2>Living cost by category</h2>
-                  </div>
-                  <PlannerBarChart data={monthlyEstimateChart} tone="teal" />
-                </article>
-              </section>
-            ) : (
-              <section className="expense-card expense-card--table">
-                <div className="expense-section-head">
-                  <span>Monthly costs</span>
-                  <h2>Monthly planning unlocks after you confirm the application</h2>
-                </div>
-                <p className="expense-empty-note">
-                  When you return from the university apply page and confirm <strong>Yes</strong>, this section will switch to the full semester and monthly living cost planner.
-                </p>
-              </section>
-            )}
-
-            <section className="expense-layout">
-              <article className="expense-card">
-                <div className="expense-section-head">
-                  <span>Recorded spending</span>
-                  <h2>Add an expense entry</h2>
-                </div>
-                <form className="expense-form" onSubmit={handleSubmitExpense}>
-                  <select value={form.category} onChange={(event) => setForm((prev) => ({ ...prev, category: event.target.value }))}>
-                      {["Rent", "Food", "Transport", "Utilities", "Insurance", "Tuition", "Visa", "Books", "IELTS", "Application", "Other"].map((option) => (
-                      <option key={option} value={option}>
-                        {option}
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    type="number"
-                    min="0"
-                    placeholder="Amount"
-                    value={form.amount}
-                    onChange={(event) => setForm((prev) => ({ ...prev, amount: event.target.value }))}
-                  />
-                  <input
-                    type="month"
-                    value={form.month}
-                    onChange={(event) => setForm((prev) => ({ ...prev, month: event.target.value }))}
-                  />
-                  <input
-                    type="text"
-                    placeholder="Note"
-                    value={form.note}
-                    onChange={(event) => setForm((prev) => ({ ...prev, note: event.target.value }))}
-                  />
-                  <button type="submit">Save</button>
-                </form>
-
-                <div className="expense-tracker-actions">
-                  <button type="button" className="expense-report-btn" onClick={exportReport}>
-                    Download report
-                  </button>
-                </div>
-              </article>
-
-              <article className="expense-card">
-                <div className="expense-section-head">
-                  <span>Compare options</span>
-                  <h2>Compare cost with another university</h2>
-                </div>
-                <div className="expense-compare-select">
-                  <label htmlFor="compare-university">Choose comparison university</label>
-                  <select
-                    id="compare-university"
-                    value={compareUniversityId}
-                    onChange={(event) => setCompareUniversityId(event.target.value)}
-                  >
-                    <option value="">Select university</option>
-                    {universities
-                      .filter((item) => String(item.id) !== String(selectedUniversityId))
-                      .map((item) => (
-                        <option key={item.id} value={item.id}>
-                          {item.name}
-                        </option>
-                      ))}
-                  </select>
-                </div>
-
-                {comparison ? (
-                  <div className="expense-compare-grid">
-                    <div className="expense-compare-card">
-                      <h3>{selectedUniversity.name}</h3>
-                      <p>Tuition: {formatMoney(comparison.left.annualTuition, currency)}</p>
-                      <p>Monthly living: {formatMoney(comparison.left.monthlyLiving, currency)}</p>
-                      <p>Year-one estimate: {formatMoney(comparison.left.totalYearOne, currency)}</p>
-                    </div>
-                    <div className="expense-compare-card expense-compare-card--accent">
-                      <h3>{compareUniversity.name}</h3>
-                      <p>Tuition: {formatMoney(comparison.right.annualTuition, getCurrencyByCountry(compareUniversity.country))}</p>
-                      <p>Monthly living: {formatMoney(comparison.right.monthlyLiving, getCurrencyByCountry(compareUniversity.country))}</p>
-                      <p>Year-one estimate: {formatMoney(comparison.right.totalYearOne, getCurrencyByCountry(compareUniversity.country))}</p>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="expense-empty-note">Choose another university to compare tuition and living-cost estimates side by side.</p>
-                )}
-              </article>
-            </section>
-
-            <section className="expense-card expense-card--table">
-              <div className="expense-section-head">
-                <span>History</span>
-                <h2>Recorded expenses</h2>
-              </div>
-              <div className="expense-table-wrap">
-                <table className="expense-table">
-                  <thead>
-                    <tr>
-                      <th>Month</th>
-                      <th>Category</th>
-                      <th>Amount</th>
-                      <th>Note</th>
-                      <th />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {currentExpenses.length ? (
-                      currentExpenses.map((expense) => (
-                        <tr key={expense.id}>
-                          <td>{expense.month}</td>
-                          <td>{expense.category}</td>
-                          <td>{formatMoney(expense.amount, currency)}</td>
-                          <td>{expense.note || "-"}</td>
-                          <td>
-                            <button type="button" className="expense-delete-btn" onClick={() => deleteExpense(expense.id)}>
-                              Delete
-                            </button>
-                          </td>
-                        </tr>
-                      ))
-                    ) : (
-                      <tr>
-                        <td colSpan="5">No expenses recorded yet. Start by saving one from the form above.</td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </section>
           </>
+        )}
+
+        {activeStep === "compare" && (
+          <section className="expense-final-card">
+            <div className="expense-final-card__head">
+              <span>Compare</span>
+              <h2>Compare with another university</h2>
+              <p>Keep this separate so the main tracker stays simple.</p>
+            </div>
+            <div className="expense-final-compare-select">
+              <select value={compareUniversityId} onChange={(event) => setCompareUniversityId(event.target.value)}>
+                <option value="">Select comparison university</option>
+                {universities
+                  .filter((university) => String(university.id) !== String(selectedUniversityId))
+                  .map((university) => (
+                    <option key={university.id} value={university.id}>
+                      {university.name}
+                    </option>
+                  ))}
+              </select>
+            </div>
+            {compareUniversity ? (
+              <>
+                <div className="expense-final-compare-grid">
+                  <article className="expense-final-compare-card">
+                    <span>This university total</span>
+                    <strong>{formatMoney(estimatedYearOne, selectedCurrency)}</strong>
+                  </article>
+                  <article className="expense-final-compare-card">
+                    <span>Comparison university total</span>
+                    <strong>{formatMoney(compareTotal, getCurrencyByCountry(compareUniversity.country))}</strong>
+                  </article>
+                  <article className="expense-final-compare-card">
+                    <span>Difference</span>
+                    <strong>{formatMoney(Math.abs(difference), selectedCurrency)}</strong>
+                  </article>
+                  <article className="expense-final-compare-card">
+                    <span>Main expensive area</span>
+                    <strong>{mainDifference?.label || "-"}</strong>
+                  </article>
+                </div>
+                <div className="expense-final-compare-note">
+                  <p>{compareInsight}</p>
+                </div>
+              </>
+            ) : (
+              <div className="expense-final-empty">
+                <p>No comparison selected yet.</p>
+                <span>Choose another university to see the year-one difference.</span>
+              </div>
+            )}
+          </section>
         )}
       </main>
       <Footer />

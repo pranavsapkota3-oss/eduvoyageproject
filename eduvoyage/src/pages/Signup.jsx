@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 const API_URL = "http://localhost:5000"; // backend base URL
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || "";
 
 export default function Signup() {
   const navigate = useNavigate();
+  const googleButtonRef = useRef(null);
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -15,15 +17,103 @@ export default function Signup() {
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(false);
 
+  const authIntro = {
+    signup: {
+      eyebrow: "Start your account",
+      title: "Create Account",
+      text: "Set up your EduVoyage account to track universities, scholarships, documents, and expenses in one flow.",
+    },
+    verify: {
+      eyebrow: "Verify email",
+      title: "Confirm your code",
+      text: "Enter the verification code we sent to your email to activate your account.",
+    },
+  };
+
+  useEffect(() => {
+    if (!GOOGLE_CLIENT_ID || step !== "signup") return undefined;
+
+    let isMounted = true;
+    const existingScript = document.querySelector('script[data-google-identity="true"]');
+
+    const initializeGoogle = () => {
+      if (!isMounted || !window.google?.accounts?.id || !googleButtonRef.current) return;
+
+      window.google.accounts.id.initialize({
+        client_id: GOOGLE_CLIENT_ID,
+        callback: async (response) => {
+          if (!response?.credential) {
+            setStatus("Google sign in did not return a valid credential.");
+            return;
+          }
+
+          try {
+            setLoading(true);
+            const res = await fetch(`${API_URL}/api/auth/google`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ credential: response.credential }),
+            });
+
+            const data = await res.json();
+            if (!res.ok) {
+              setStatus(data.message || "Google sign in failed");
+              return;
+            }
+
+            localStorage.setItem("token", data.token);
+            localStorage.setItem("user", JSON.stringify(data.user));
+            setStatus("Google sign in successful.");
+            navigate("/");
+          } catch (err) {
+            console.error("Google sign in failed:", err);
+            setStatus("Google sign in failed.");
+          } finally {
+            setLoading(false);
+          }
+        },
+      });
+
+      googleButtonRef.current.innerHTML = "";
+      window.google.accounts.id.renderButton(googleButtonRef.current, {
+        theme: "outline",
+        size: "large",
+        shape: "pill",
+        text: "signup_with",
+        width: 360,
+      });
+    };
+
+    if (existingScript) {
+      initializeGoogle();
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    const script = document.createElement("script");
+    script.src = "https://accounts.google.com/gsi/client";
+    script.async = true;
+    script.defer = true;
+    script.dataset.googleIdentity = "true";
+    script.onload = initializeGoogle;
+    document.head.appendChild(script);
+
+    return () => {
+      isMounted = false;
+    };
+  }, [navigate, step]);
+
   const handleSignup = async (e) => {
     e.preventDefault();
 
     if (password !== confirmPassword) {
-      alert("Passwords do not match");
+      setStatus("Passwords do not match");
       return;
     }
 
     try {
+      setStatus("");
       setLoading(true);
 
       const res = await fetch(`${API_URL}/api/auth/signup`, {
@@ -144,11 +234,24 @@ export default function Signup() {
 
         <div className="auth-card">
           <div className="auth-header">
-            <h1>Create Account</h1>
-            <p>Sign up to access university listings</p>
+            <span className="auth-eyebrow">{authIntro[step].eyebrow}</span>
+            <h1>{authIntro[step].title}</h1>
+            <p>{authIntro[step].text}</p>
           </div>
 
-          <form onSubmit={step === "signup" ? handleSignup : handleVerifyOtp}>
+          {step === "signup" && (
+            <div className="auth-social">
+              <div ref={googleButtonRef} className="auth-google-button" />
+              {!GOOGLE_CLIENT_ID && (
+                <p className="auth-social__note">Add `VITE_GOOGLE_CLIENT_ID` to the frontend env file to enable Google sign in.</p>
+              )}
+              <div className="auth-divider">
+                <span>or continue with email</span>
+              </div>
+            </div>
+          )}
+
+          <form className="auth-form" onSubmit={step === "signup" ? handleSignup : handleVerifyOtp}>
             <div className="form-group">
               <label>Full Name</label>
               <input
@@ -210,24 +313,26 @@ export default function Signup() {
               </div>
             )}
 
-            <button type="submit" className="btn-gradient" disabled={loading}>
-              {step === "signup"
-                ? loading ? "Creating..." : "Create Account"
-                : loading ? "Verifying..." : "Verify Code"}
-            </button>
-
-            {step === "verify" && (
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={handleResendOtp}
-                disabled={loading}
-              >
-                Resend Code
+            <div className="auth-actions">
+              <button type="submit" className="btn-gradient" disabled={loading}>
+                {step === "signup"
+                  ? loading ? "Creating..." : "Create Account"
+                  : loading ? "Verifying..." : "Verify Code"}
               </button>
-            )}
 
-            {status && <p className="auth-footer">{status}</p>}
+              {step === "verify" && (
+                <button
+                  type="button"
+                  className="btn-secondary auth-secondary-btn"
+                  onClick={handleResendOtp}
+                  disabled={loading}
+                >
+                  Resend Code
+                </button>
+              )}
+            </div>
+
+            {status && <p className="auth-status">{status}</p>}
 
             <p className="auth-footer">
               Already have an account? <Link to="/login">Login here</Link>

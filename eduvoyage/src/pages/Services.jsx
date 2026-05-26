@@ -1,3 +1,4 @@
+import { useState } from "react";
 import Navbar from "../components/Navbar";
 import Footer from "../components/Footer";
 
@@ -54,6 +55,48 @@ const processSteps = [
 ];
 
 export default function Services() {
+  const token = localStorage.getItem("token");
+  const [requestForm, setRequestForm] = useState({
+    topic: "",
+    preferred_country: "",
+    priority: "normal",
+    message: "",
+  });
+  const [requestStatus, setRequestStatus] = useState("");
+
+  const handleSubmitRequest = async (event) => {
+    event.preventDefault();
+    if (!token) {
+      setRequestStatus("Login as a student before submitting a counseling request.");
+      return;
+    }
+
+    try {
+      const res = await fetch("http://localhost:5000/api/profile/counseling-requests", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(requestForm),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setRequestStatus(data.message || "Could not submit counseling request.");
+        return;
+      }
+      setRequestStatus("Counseling request submitted.");
+      setRequestForm({
+        topic: "",
+        preferred_country: "",
+        priority: "normal",
+        message: "",
+      });
+    } catch {
+      setRequestStatus("Could not submit counseling request.");
+    }
+  };
+
   return (
     <>
       <Navbar />
@@ -65,7 +108,7 @@ export default function Services() {
               <p className="services-kicker">EduVoyage Services</p>
               <h1>End-to-end support for your study abroad journey</h1>
               <p>
-                Built for students who need a clear path from profile building to final admission and financial planning.
+                Built for students who want a clearer plan from shortlisting and scholarships to applications, budgeting, and visa preparation.
               </p>
               <div className="services-hero__chips">
                 <span>University Shortlisting</span>
@@ -98,7 +141,7 @@ export default function Services() {
         <section className="services-process">
           <div className="services-section-head">
             <p>How It Works</p>
-            <h2>A structured process, not random advice</h2>
+            <h2>A clear process from profile to admission</h2>
           </div>
           <div className="services-process__grid">
             {processSteps.map((item) => (
@@ -114,7 +157,7 @@ export default function Services() {
         <section className="services-grid">
           <div className="services-section-head services-section-head--light">
             <p>Service Modules</p>
-            <h2>Choose the support you need, when you need it</h2>
+            <h2>Choose support based on the stage you are in</h2>
           </div>
           {services.map((service, index) => (
             <article className="service-card" key={service.title} style={{ animationDelay: `${index * 60}ms` }}>
@@ -136,7 +179,7 @@ export default function Services() {
             <div>
               <h2>Need a custom plan?</h2>
               <p>
-                Start with Profile Completion, then use Scholarship Finder and Countries Explorer to build a realistic shortlist with budget alignment.
+                Start by completing your profile, then use the scholarship, country, and expense tools to build a shortlist you can actually apply to.
               </p>
             </div>
             <div className="services-cta__chips">
@@ -146,6 +189,48 @@ export default function Services() {
               <span>Expense Tracker</span>
             </div>
           </div>
+        </section>
+
+        <section className="services-request">
+          <div className="services-section-head">
+            <p>Counseling Request</p>
+            <h2>Send your request to the agent dashboard</h2>
+          </div>
+          <form className="services-request__form" onSubmit={handleSubmitRequest}>
+            <input
+              type="text"
+              placeholder="Topic"
+              value={requestForm.topic}
+              onChange={(e) => setRequestForm((prev) => ({ ...prev, topic: e.target.value }))}
+            />
+            <select
+              value={requestForm.preferred_country}
+              onChange={(e) => setRequestForm((prev) => ({ ...prev, preferred_country: e.target.value }))}
+            >
+              <option value="">Preferred country</option>
+              <option value="United States">United States</option>
+              <option value="United Kingdom">United Kingdom</option>
+              <option value="Canada">Canada</option>
+              <option value="Australia">Australia</option>
+            </select>
+            <select
+              value={requestForm.priority}
+              onChange={(e) => setRequestForm((prev) => ({ ...prev, priority: e.target.value }))}
+            >
+              <option value="low">Low priority</option>
+              <option value="normal">Normal priority</option>
+              <option value="high">High priority</option>
+            </select>
+            <textarea
+              placeholder="Explain what support you need"
+              value={requestForm.message}
+              onChange={(e) => setRequestForm((prev) => ({ ...prev, message: e.target.value }))}
+            />
+            <div className="services-request__actions">
+              <button type="submit">Submit request</button>
+              {requestStatus && <p>{requestStatus}</p>}
+            </div>
+          </form>
         </section>
       </main>
       <Footer />

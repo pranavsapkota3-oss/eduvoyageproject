@@ -1,18 +1,17 @@
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useState, useEffect, useRef } from "react";
+import logoImage from "../assets/eduvoyage-logo.png";
 
 export default function Navbar() {
   const navigate = useNavigate();
   const location = useLocation();
   const [open, setOpen] = useState(false);
-  const [language, setLanguage] = useState(
-    () => localStorage.getItem("site_language") || "EN"
-  );
   const [pendingApplication, setPendingApplication] = useState(null);
   const dropdownRef = useRef(null);
 
   // get user from localStorage
   const user = JSON.parse(localStorage.getItem("user"));
+  const token = localStorage.getItem("token");
 
   const logout = () => {
     localStorage.removeItem("token");
@@ -31,10 +30,6 @@ export default function Navbar() {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem("site_language", language);
-  }, [language]);
-
-  useEffect(() => {
     try {
       const raw = localStorage.getItem("university_application_flow_v1");
       const all = raw ? JSON.parse(raw) : {};
@@ -45,7 +40,7 @@ export default function Navbar() {
     }
   }, [location.pathname, location.search]);
 
-  const updatePendingApplication = (applied) => {
+  const updatePendingApplication = async (applied) => {
     if (!pendingApplication) return;
 
     try {
@@ -63,6 +58,24 @@ export default function Navbar() {
 
       localStorage.setItem("university_application_flow_v1", JSON.stringify(all));
       setPendingApplication(null);
+
+      if (token) {
+        fetch("http://localhost:5000/api/profile/applications", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            university_id: pendingApplication.university_id,
+            source: "navbar_followup",
+            status: applied ? "applying" : "shortlisted",
+            notes: applied
+              ? "Student confirmed they already applied from the return prompt."
+              : "Student opened the university application flow but marked it as not submitted yet.",
+          }),
+        }).catch(() => {});
+      }
 
       if (applied) {
         navigate(`/expense-tracker?university=${key}&source=application`);
@@ -87,7 +100,7 @@ export default function Navbar() {
       <nav className="navbar">
         <div className="navbar-container">
           <Link to="/" className="navbar-logo">
-            EduVoyage
+            <img src={logoImage} alt="EduVoyage" className="navbar-logo__image" />
           </Link>
 
           <ul className="navbar-menu">
@@ -100,17 +113,6 @@ export default function Navbar() {
           </ul>
 
           <div className="navbar-buttons">
-            <label className="navbar-language-shell" aria-label="Language selector">
-              <span>Language</span>
-              <select
-                className="navbar-language"
-                value={language}
-                onChange={(event) => setLanguage(event.target.value)}
-              >
-                <option value="EN">English</option>
-                <option value="NP">Nepali</option>
-              </select>
-            </label>
             {user ? (
               <div className="navbar-user-wrap" ref={dropdownRef}>
                 <button
@@ -131,6 +133,14 @@ export default function Navbar() {
                   <div className="profile-dropdown" role="menu">
                     <Link to="/profile" className="dropdown-item" onClick={() => setOpen(false)}>
                       Profile
+                    </Link>
+
+                    <Link to="/document-vault" className="dropdown-item" onClick={() => setOpen(false)}>
+                      Document Vault
+                    </Link>
+
+                    <Link to="/applications" className="dropdown-item" onClick={() => setOpen(false)}>
+                      My Applications
                     </Link>
 
                     {(user.role === "agent" || user.role === "admin") && (
@@ -164,18 +174,6 @@ export default function Navbar() {
           </div>
         </div>
       </nav>
-
-      <div className="site-language-floating">
-        <span>Language</span>
-        <select
-          className="site-language-floating__select"
-          value={language}
-          onChange={(event) => setLanguage(event.target.value)}
-        >
-          <option value="EN">English</option>
-          <option value="NP">Nepali</option>
-        </select>
-      </div>
 
       {pendingApplication && (
         <div className="application-return-prompt">

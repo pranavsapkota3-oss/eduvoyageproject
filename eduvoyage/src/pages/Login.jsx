@@ -13,6 +13,24 @@ export default function Login() {
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(false);
 
+  const authIntro = {
+    login: {
+      eyebrow: "Welcome back",
+      title: "Login to EduVoyage",
+      text: "Continue with your profile, scholarships, documents, and expense planning from one place.",
+    },
+    forgot: {
+      eyebrow: "Account recovery",
+      title: "Send reset code",
+      text: "Enter the email you used for EduVoyage and we will send a verification code.",
+    },
+    reset: {
+      eyebrow: "Reset password",
+      title: "Create a new password",
+      text: "Use the code from your email, then set a new password to regain access.",
+    },
+  };
+
   const handleLogin = async (e) => {
     e.preventDefault();
 
@@ -132,11 +150,15 @@ export default function Login() {
 
         <div className="auth-card">
           <div className="auth-header">
-            <h1>Login to EduVoyage</h1>
-            <p>Sign in to your account to continue</p>
+            <span className="auth-eyebrow">{authIntro[mode].eyebrow}</span>
+            <h1>{authIntro[mode].title}</h1>
+            <p>{authIntro[mode].text}</p>
           </div>
 
-          <form onSubmit={mode === "login" ? handleLogin : mode === "forgot" ? handleSendReset : handleResetPassword}>
+          <form
+            className="auth-form"
+            onSubmit={mode === "login" ? handleLogin : mode === "forgot" ? handleSendReset : handleResetPassword}
+          >
             <div className="form-group">
               <label>Email Address</label>
               <input
@@ -197,41 +219,43 @@ export default function Login() {
               </>
             )}
 
-            <button type="submit" className="btn-gradient" disabled={loading}>
-              {mode === "login"
-                ? loading ? "Logging in..." : "Login"
-                : mode === "forgot"
-                ? loading ? "Sending..." : "Send Reset Code"
-                : loading ? "Updating..." : "Reset Password"}
-            </button>
-
-            {mode === "login" && (
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => {
-                  setMode("forgot");
-                  setStatus("");
-                }}
-              >
-                Forgot password?
+            <div className="auth-actions">
+              <button type="submit" className="btn-gradient" disabled={loading}>
+                {mode === "login"
+                  ? loading ? "Logging in..." : "Login"
+                  : mode === "forgot"
+                  ? loading ? "Sending..." : "Send Reset Code"
+                  : loading ? "Updating..." : "Reset Password"}
               </button>
-            )}
 
-            {mode !== "login" && (
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => {
-                  setMode("login");
-                  setStatus("");
-                }}
-              >
-                Back to login
-              </button>
-            )}
+              {mode === "login" && (
+                <button
+                  type="button"
+                  className="btn-secondary auth-secondary-btn"
+                  onClick={() => {
+                    setMode("forgot");
+                    setStatus("");
+                  }}
+                >
+                  Forgot password?
+                </button>
+              )}
 
-            {status && <p className="auth-footer">{status}</p>}
+              {mode !== "login" && (
+                <button
+                  type="button"
+                  className="btn-secondary auth-secondary-btn"
+                  onClick={() => {
+                    setMode("login");
+                    setStatus("");
+                  }}
+                >
+                  Back to login
+                </button>
+              )}
+            </div>
+
+            {status && <p className="auth-status">{status}</p>}
           </form>
 
           <p className="auth-footer">

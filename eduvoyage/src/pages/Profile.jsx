@@ -4,6 +4,18 @@ import Navbar from "../components/Navbar";
 import Footer from "../components/Footer";
 
 const EXPENSE_STORAGE_KEY = "expense_tracker_by_university_v1";
+const COUNTRY_OPTIONS = [
+  "Nepal",
+  "United States",
+  "United Kingdom",
+  "Canada",
+  "Australia",
+  "India",
+  "China",
+  "Japan",
+  "Germany",
+  "New Zealand",
+];
 
 const sumByCategory = (items, matcher) =>
   items.reduce((total, item) => {
@@ -237,14 +249,19 @@ export default function Profile() {
                 </div>
                 <div className="profile-field">
                   <label htmlFor="country">Country</label>
-                  <input
+                  <select
                     id="country"
                     name="country"
-                    type="text"
-                    placeholder="Nepal"
                     value={formData.country}
                     onChange={handleChange}
-                  />
+                  >
+                    <option value="" disabled>Select country</option>
+                    {COUNTRY_OPTIONS.map((country) => (
+                      <option key={country} value={country}>
+                        {country}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div className="profile-field">
                   <label htmlFor="nationality">Nationality</label>

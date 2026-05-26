@@ -23,7 +23,8 @@ export default function Footer() {
         <div className="footer-column">
           <h4>Contact Info</h4>
           <p>Email: info@eduvoyage.com</p>
-          <p>Phone: +1 (555) 123-4567</p>
+          <p>Phone: +977 9862366792</p>
+          <p>Location: kathmandu,Nepal</p>
         </div>
       </div>
 

@@ -49,6 +49,63 @@ const summariseLocation = (uni) => {
   return "-";
 };
 
+const buildScholarshipSummary = (uni) => {
+  if (!uni) return "";
+  const parts = [];
+
+  if (uni.scholarship_name) {
+    parts.push(uni.scholarship_name);
+  }
+
+  if (uni.scholarship_type === "full_tuition") {
+    parts.push("Full tuition scholarship");
+  } else if (uni.scholarship_type === "percentage_waiver" && uni.scholarship_amount) {
+    parts.push(`${uni.scholarship_amount}% tuition waiver`);
+  } else if (uni.scholarship_type === "fixed_amount" && uni.scholarship_amount) {
+    parts.push(`USD ${Number(uni.scholarship_amount).toLocaleString()} fixed award`);
+  }
+
+  if (uni.min_ielts_score) {
+    parts.push(`Minimum IELTS ${uni.min_ielts_score}`);
+  }
+
+  if (uni.min_sat_score) {
+    parts.push(`Minimum SAT ${uni.min_sat_score}`);
+  }
+
+  if (uni.scholarship_eligibility_note) {
+    parts.push(uni.scholarship_eligibility_note);
+  } else if (uni.scholarships) {
+    parts.push(uni.scholarships);
+  }
+
+  return parts.filter(Boolean).join(". ");
+};
+
+const shortParagraph = (text, fallback) => {
+  const value = String(text || "").replace(/\s+/g, " ").trim();
+  if (!value) return fallback;
+  const firstSentence = value.split(/[.!?]/)[0]?.trim() || value;
+  return firstSentence.length > 190 ? `${firstSentence.slice(0, 187)}...` : `${firstSentence}${/[.!?]$/.test(firstSentence) ? "" : "."}`;
+};
+
+const buildQuickNotes = (uni, livingCostText, intakeInfo) => [
+  {
+    label: "Best for",
+    value: uni?.courses
+      ? uni.courses.split(",").map((item) => item.trim()).filter(Boolean).slice(0, 3).join(", ")
+      : "General international study options",
+  },
+  {
+    label: "Budget note",
+    value: shortParagraph(livingCostText, "Living costs vary by city and housing type."),
+  },
+  {
+    label: "Planning note",
+    value: shortParagraph(intakeInfo?.deadline, "Check the official university website for intake deadlines."),
+  },
+];
+
 export default function UniversityDetail() {
   const { id } = useParams();
   const [uni, setUni] = useState(null);
@@ -81,6 +138,7 @@ export default function UniversityDetail() {
     if (!uni) return;
     const applyUrl = getUniversityApplyUrl(uni);
     const websiteUrl = getUniversityWebsiteUrl(uni);
+    const currentToken = localStorage.getItem("token");
 
     try {
       const raw = localStorage.getItem(APPLICATION_STORAGE_KEY);
@@ -97,6 +155,22 @@ export default function UniversityDetail() {
       localStorage.setItem(APPLICATION_STORAGE_KEY, JSON.stringify(all));
     } catch {
       // keep navigation working even if localStorage is unavailable
+    }
+
+    if (currentToken) {
+      fetch("http://localhost:5000/api/profile/applications", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${currentToken}`,
+        },
+        body: JSON.stringify({
+          university_id: uni.id,
+          source: "university_detail",
+          status: "shortlisted",
+          notes: "Added from Apply Now on university detail page.",
+        }),
+      }).catch(() => {});
     }
 
     window.open(applyUrl, "_blank", "noopener,noreferrer");
@@ -134,6 +208,12 @@ export default function UniversityDetail() {
           location: uni.location,
           contact: uni.contact,
           image_url: imageDraft.trim(),
+          min_ielts_score: uni.min_ielts_score,
+          min_sat_score: uni.min_sat_score,
+          scholarship_name: uni.scholarship_name,
+          scholarship_amount: uni.scholarship_amount,
+          scholarship_type: uni.scholarship_type,
+          scholarship_eligibility_note: uni.scholarship_eligibility_note,
         }),
       });
 
@@ -193,6 +273,12 @@ export default function UniversityDetail() {
           location: uni.location,
           contact: uni.contact,
           image_url: uni.image_url,
+          min_ielts_score: uni.min_ielts_score,
+          min_sat_score: uni.min_sat_score,
+          scholarship_name: uni.scholarship_name,
+          scholarship_amount: uni.scholarship_amount,
+          scholarship_type: uni.scholarship_type,
+          scholarship_eligibility_note: uni.scholarship_eligibility_note,
         }),
       });
 
@@ -277,14 +363,44 @@ export default function UniversityDetail() {
   const websiteUrl = uni ? getUniversityWebsiteUrl(uni) : "";
   const intakeInfo = uni ? countryIntakes[uni.country] || { intake: "Main annual intake", deadline: "Check the official website for course-specific deadlines." } : null;
   const livingCostText = uni ? livingCostGuide[uni.country] || "Living cost depends on city, accommodation, and student lifestyle." : "";
-  const scholarshipAvailability = uni?.scholarships ? "Available" : "Contact university";
+  const scholarshipAvailability =
+    uni?.scholarship_name || uni?.scholarships || uni?.scholarship_eligibility_note
+      ? "Available"
+      : "Contact university";
   const tuitionSummary = summariseFeeText(uni?.fees);
   const locationSummary = summariseLocation(uni);
+  const scholarshipSummary = buildScholarshipSummary(uni);
+  const overviewSummary = shortParagraph(
+    uni?.overview,
+    `${uni?.name || "This university"} offers academic programs for international students across multiple disciplines.`
+  );
+  const quickNotes = buildQuickNotes(uni, livingCostText, intakeInfo);
+  const heroFacts = [
+    { label: "World rank", value: uni?.ranking ? `#${uni.ranking}` : "Check source" },
+    { label: "Tuition", value: tuitionSummary },
+    { label: "Location", value: locationSummary },
+    { label: "Intake", value: intakeInfo?.intake || "Main annual intake" },
+  ];
+  const summaryCards = [
+    {
+      label: "Overview snapshot",
+      value: overviewSummary,
+    },
+    {
+      label: quickNotes[0]?.label || "Best fit",
+      value: quickNotes[0]?.value || "Review the courses section for program fit.",
+    },
+    {
+      label: "Scholarship snapshot",
+      value: scholarshipSummary || "Contact the university or agent for scholarship details.",
+    },
+  ];
+  const planningCards = quickNotes.slice(1);
   const sectionValues = {
     overview: uni?.overview || "",
     courses: uni?.courses || "",
     tuitionLiving: `${uni?.fees || "Contact university for tuition details."} ${livingCostText}`,
-    scholarships: uni?.scholarships || "",
+    scholarships: scholarshipSummary,
     admissions: uni?.admissions || "",
     deadlines: `${intakeInfo?.intake || ""}. ${intakeInfo?.deadline || ""}`,
     contactLocation: `${uni?.location || `${uni?.city || ""}, ${uni?.country || ""}`}\n${uni?.contact || "Contact details not available."}`,
@@ -316,34 +432,38 @@ export default function UniversityDetail() {
         {uni && (
           <>
             <header className="university-hero">
-              <img src={uni.image_url} alt={uni.name} />
+              <div className="university-hero__media">
+                <img src={uni.image_url} alt={uni.name} />
+                <div className="university-hero__media-badge">
+                  <span>World Rank</span>
+                  <strong>#{uni.ranking || "-"}</strong>
+                </div>
+              </div>
               <div className="university-hero__content">
                 <Link to="/universities" className="university-back">Back to Universities</Link>
                 <h1>{uni.name}</h1>
                 <p className="university-hero__location">{uni.location || `${uni.city}, ${uni.country}`}</p>
+                <p className="university-hero__summary">{overviewSummary}</p>
                 <div className="university-quick-facts">
-                  <div className="university-stat">
-                    <span className="university-stat__label">World Rank</span>
-                    <strong>#{uni.ranking || "-"}</strong>
+                  {heroFacts.map((fact) => (
+                    <div className="university-stat" key={fact.label}>
+                      <span className="university-stat__label">{fact.label}</span>
+                      <strong>{fact.value}</strong>
                     </div>
-                    <div className="university-stat">
-                      <span className="university-stat__label">Tuition</span>
-                      <strong>{tuitionSummary}</strong>
-                    </div>
-                    <div className="university-stat">
-                      <span className="university-stat__label">Location</span>
-                      <strong>{locationSummary}</strong>
-                    </div>
-                  <div className="university-stat">
-                    <span className="university-stat__label">Intake</span>
-                    <strong>{intakeInfo?.intake || "Main intake"}</strong>
-                  </div>
-                  <div className="university-stat">
+                  ))}
+                  <div className="university-stat university-stat--emphasis">
                     <span className="university-stat__label">Scholarships</span>
                     <strong>{scholarshipAvailability}</strong>
                   </div>
                 </div>
                 <div className="university-meta">
+                  <button type="button" className="university-apply-btn" onClick={handleApplyClick}>
+                    Apply Now
+                  </button>
+                  <Link to={`/expense-tracker?university=${uni.id}`}>Track Expenses</Link>
+                  <a href={websiteUrl} target="_blank" rel="noreferrer">
+                    Official website
+                  </a>
                   <button
                     type="button"
                     className="university-meta__link"
@@ -351,17 +471,9 @@ export default function UniversityDetail() {
                       document.getElementById("university-courses-section")?.scrollIntoView({ behavior: "smooth", block: "start" })
                     }
                   >
-                    View Courses
+                    Jump to Courses
                   </button>
-                  <Link to={`/expense-tracker?university=${uni.id}`}>Track Expenses</Link>
-                  <button type="button" className="university-apply-btn" onClick={handleApplyClick}>
-                    Apply Now
-                  </button>
-                  <a href={websiteUrl} target="_blank" rel="noreferrer">
-                    Official website
-                  </a>
                 </div>
-
                 {canEditUniversity && (
                   <div className="university-image-editor">
                     <div className="university-image-editor__header">
@@ -391,6 +503,24 @@ export default function UniversityDetail() {
 
             <section className="university-layout">
               <div className="university-main">
+                <section className="university-summary-strip">
+                  {summaryCards.map((card) => (
+                    <article className="university-summary-card" key={card.label}>
+                      <span className="university-summary-card__label">{card.label}</span>
+                      <p>{card.value}</p>
+                    </article>
+                  ))}
+                </section>
+
+                <section className="university-summary-strip university-summary-strip--notes">
+                  {planningCards.map((item) => (
+                    <article key={item.label} className="university-summary-card">
+                      <span className="university-summary-card__label">{item.label}</span>
+                      <p>{item.value}</p>
+                    </article>
+                  ))}
+                </section>
+
                 <nav className="university-anchor-nav">
                   {detailSections.map((section) => (
                     <a key={section.key} href={`#university-${section.key}-section`}>
@@ -487,6 +617,10 @@ export default function UniversityDetail() {
                             <span>Living cost guide</span>
                             <strong>{livingCostText}</strong>
                           </div>
+                          <div className="university-fact-card">
+                            <span>Expense planning</span>
+                            <strong>Use the expense tracker to combine application costs, tuition, and monthly living estimates.</strong>
+                          </div>
                         </div>
                       </div>
                     ) : section.key === "deadlines" ? (
@@ -504,17 +638,25 @@ export default function UniversityDetail() {
                       </div>
                     ) : section.key === "contactLocation" ? (
                       <div className="university-panel__body university-panel__body--facts">
-                        <div className="university-fact-grid">
-                          <div className="university-fact-card">
-                            <span>Location</span>
-                            <strong>{uni.location || `${uni.city || "-"}, ${uni.country || "-"}`}</strong>
-                          </div>
-                          <div className="university-fact-card">
-                            <span>Admissions contact</span>
-                            <strong>{uni.contact || "Contact details not available."}</strong>
-                          </div>
+                      <div className="university-fact-grid">
+                        <div className="university-fact-card">
+                          <span>Location</span>
+                          <strong>{uni.location || `${uni.city || "-"}, ${uni.country || "-"}`}</strong>
+                        </div>
+                        <div className="university-fact-card">
+                          <span>Admissions contact</span>
+                          <strong>{uni.contact || "Contact details not available."}</strong>
+                        </div>
+                        <div className="university-fact-card">
+                          <span>Official website</span>
+                          <strong>
+                            <a href={websiteUrl} target="_blank" rel="noreferrer">
+                              Visit official website
+                            </a>
+                          </strong>
                         </div>
                       </div>
+                    </div>
                     ) : (
                       <div className="university-panel__body">
                         <p className="university-panel__lead">{sectionValues[section.key]}</p>
@@ -526,19 +668,24 @@ export default function UniversityDetail() {
 
               <aside className="university-sidebar">
                 <article className="university-sidecard">
-                  <span className="university-sidecard__label">Tuition Range</span>
+                  <span className="university-sidecard__label">Tuition & Living Cost</span>
                   <p className="university-sidecard__value">{tuitionSummary}</p>
-                  <p>Estimated tuition range. Check the official website for the exact course-wise breakdown.</p>
+                  <p>{livingCostText}</p>
                 </article>
 
                 <article className="university-sidecard">
                   <span className="university-sidecard__label">Admissions Contact</span>
-                  <h3>Contact</h3>
+                  <h3>{uni.city || uni.country || "Campus details"}</h3>
                   <p>{uni.contact || "Contact details not available."}</p>
+                  <p>
+                    <a href={websiteUrl} target="_blank" rel="noreferrer">
+                      Visit official website
+                    </a>
+                  </p>
                 </article>
 
                 <article className="university-sidecard university-sidecard--accent">
-                  <span className="university-sidecard__label">Planning Next</span>
+                  <span className="university-sidecard__label">Next Steps</span>
                   <ul className="university-sidecard__list">
                     <li>Review course requirements</li>
                     <li>Estimate tuition and living costs</li>
@@ -561,7 +708,7 @@ export default function UniversityDetail() {
                       {item.image_url && <img src={item.image_url} alt={item.name} />}
                       <div>
                         <strong>{item.name}</strong>
-                        <p>#{item.ranking || "-"} · {item.city || "City"}, {item.country}</p>
+                        <p>#{item.ranking || "-"} | {item.city || "City"}, {item.country}</p>
                       </div>
                     </Link>
                   ))}

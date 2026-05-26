@@ -15,6 +15,7 @@ export default function AcademicBackground() {
     toefl_score: "",
     gre_score: "",
     gmat_score: "",
+    sat_score: "",
   });
   const [status, setStatus] = useState({ type: "", message: "" });
   const [saving, setSaving] = useState(false);
@@ -41,6 +42,7 @@ export default function AcademicBackground() {
           toefl_score: data.academic.toefl_score || "",
           gre_score: data.academic.gre_score || "",
           gmat_score: data.academic.gmat_score || "",
+          sat_score: data.academic.sat_score || "",
         });
       } catch {
         setStatus({ type: "error", message: "Failed to load academic data." });
@@ -228,6 +230,17 @@ export default function AcademicBackground() {
                         type="text"
                         placeholder="0-120"
                         value={formData.toefl_score}
+                        onChange={handleChange}
+                      />
+                    </div>
+                    <div className="profile-field">
+                      <label htmlFor="sat">SAT Score</label>
+                      <input
+                        id="sat"
+                        name="sat_score"
+                        type="text"
+                        placeholder="400-1600"
+                        value={formData.sat_score}
                         onChange={handleChange}
                       />
                     </div>

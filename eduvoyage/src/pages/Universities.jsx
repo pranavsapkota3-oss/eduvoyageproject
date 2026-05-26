@@ -21,6 +21,20 @@ const getPrimarySubject = (courses) => {
   return String(courses).split(",")[0]?.trim() || "General";
 };
 
+const normalizeCountryLabel = (country) => {
+  const value = String(country || "").trim().toLowerCase();
+  if (value === "usa" || value === "us" || value === "united states" || value === "united states of america") {
+    return "United States";
+  }
+  if (value === "uk" || value === "u.k." || value === "united kingdom" || value === "great britain") {
+    return "United Kingdom";
+  }
+  if (!value) return "";
+  return String(country)
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+};
+
 const buildPopularityScore = (uni) => {
   const rankingScore = uni.ranking ? Math.max(0, 220 - Number(uni.ranking)) : 20;
   const scholarshipScore = uni.scholarships ? 20 : 0;
@@ -33,7 +47,7 @@ const compareSummary = (uni) => ({
   id: uni.id,
   name: uni.name,
   ranking: uni.ranking || "-",
-  country: uni.country || "-",
+  country: normalizeCountryLabel(uni.country) || "-",
   city: uni.city || "-",
   fees: uni.fees || "Contact university",
   subject: getPrimarySubject(uni.courses),
@@ -78,7 +92,7 @@ export default function Universities() {
   }, []);
 
   const availableCountries = useMemo(
-    () => [...new Set(items.map((item) => item.country).filter(Boolean))].sort(),
+    () => [...new Set(items.map((item) => normalizeCountryLabel(item.country)).filter(Boolean))].sort(),
     [items]
   );
 
@@ -101,7 +115,7 @@ export default function Universities() {
       const haystack = [uni.name, uni.country, uni.city, uni.courses].join(" ").toLowerCase();
 
       if (normalizedQuery && !haystack.includes(normalizedQuery)) return false;
-      if (countryFilter && uni.country !== countryFilter) return false;
+      if (countryFilter && normalizeCountryLabel(uni.country) !== countryFilter) return false;
       if (subjectFilter && !courses.includes(subjectFilter.toLowerCase())) return false;
       if (scholarshipFilter && !scholarships) return false;
 
@@ -261,7 +275,7 @@ export default function Universities() {
               <h3>No universities found for these filters.</h3>
               <p>Try broadening the search or start with one of these suggestions:</p>
               <div className="universities-empty__suggestions">
-                <button type="button" onClick={() => { setQuery(""); setCountryFilter("USA"); setRankingFilter("top50"); }}>Top 50 in USA</button>
+                <button type="button" onClick={() => { setQuery(""); setCountryFilter("United States"); setRankingFilter("top50"); }}>Top 50 in United States</button>
                 <button type="button" onClick={() => { setQuery(""); setCountryFilter("Canada"); setScholarshipFilter(true); }}>Canada with scholarships</button>
                 <button type="button" onClick={() => { setQuery("Engineering"); setCountryFilter(""); setFeeFilter(""); }}>Engineering programs</button>
                 <button type="button" onClick={() => { setQuery(""); setFeeFilter("budget"); setRankingFilter(""); }}>Budget-friendly options</button>

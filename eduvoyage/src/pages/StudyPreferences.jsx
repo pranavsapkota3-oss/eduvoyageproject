@@ -3,6 +3,17 @@ import { Link, useNavigate } from "react-router-dom";
 import Navbar from "../components/Navbar";
 import Footer from "../components/Footer";
 
+const COUNTRY_OPTIONS = [
+  "United States",
+  "United Kingdom",
+  "Canada",
+  "Australia",
+  "New Zealand",
+  "Germany",
+  "Japan",
+  "Singapore",
+];
+
 export default function StudyPreferences() {
   const navigate = useNavigate();
   const [formData, setFormData] = useState({
@@ -164,14 +175,19 @@ export default function StudyPreferences() {
                   </div>
                   <div className="profile-field">
                     <label htmlFor="countries">Preferred Countries</label>
-                    <input
+                    <select
                       id="countries"
                       name="preferred_countries"
-                      type="text"
-                      placeholder="United States, Australia"
                       value={formData.preferred_countries}
                       onChange={handleChange}
-                    />
+                    >
+                      <option value="" disabled>Select preferred country</option>
+                      {COUNTRY_OPTIONS.map((country) => (
+                        <option key={country} value={country}>
+                          {country}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                   <div className="profile-field">
                     <label htmlFor="budget">Annual Budget</label>

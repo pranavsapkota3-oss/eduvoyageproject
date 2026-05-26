@@ -10,14 +10,19 @@ export default function ScholarshipFinder() {
   const [profileUsed, setProfileUsed] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [eligibilityMessage, setEligibilityMessage] = useState("");
+
+  const gpaValue = Number(profileUsed?.gpa);
+  const blockedByGpa = Number.isFinite(gpaValue) && gpaValue < 3;
+  const visibleRecommendations = blockedByGpa ? [] : recommendations;
 
   const avgFit = useMemo(() => {
-    if (!recommendations.length) return 0;
-    const total = recommendations.reduce((sum, item) => sum + Number(item.fit_score || 0), 0);
-    return Math.round(total / recommendations.length);
-  }, [recommendations]);
+    if (!visibleRecommendations.length) return 0;
+    const total = visibleRecommendations.reduce((sum, item) => sum + Number(item.fit_score || 0), 0);
+    return Math.round(total / visibleRecommendations.length);
+  }, [visibleRecommendations]);
 
-  const topMatch = recommendations[0] || null;
+  const topMatch = visibleRecommendations[0] || null;
 
   useEffect(() => {
     const loadRecommendations = async () => {
@@ -28,6 +33,8 @@ export default function ScholarshipFinder() {
       }
 
       try {
+        setError("");
+        setEligibilityMessage("");
         const res = await fetch("http://localhost:5000/api/scholarships/recommended", {
           headers: { Authorization: `Bearer ${token}` },
         });
@@ -38,6 +45,7 @@ export default function ScholarshipFinder() {
         }
         setProfileUsed(data.profile_used || null);
         setRecommendations(data.recommendations || []);
+        setEligibilityMessage(data.eligibility_message || "");
       } catch {
         setError("Could not load scholarship recommendations.");
       } finally {
@@ -58,7 +66,7 @@ export default function ScholarshipFinder() {
               <p className="scholarship-kicker">Personalized Funding Matches</p>
               <h1>Scholarship Finder</h1>
               <p>
-                Recommendations generated from your marks, test scores, preferred countries, and study goals.
+                Explore scholarship-ready universities using your academic profile, preferred countries, and test scores.
               </p>
               <div className="scholarship-hero__chips">
                 <span>Merit-based matching</span>
@@ -70,7 +78,7 @@ export default function ScholarshipFinder() {
             <div className="scholarship-hero__stats">
               <div className="scholarship-stat-card">
                 <small>Matched Options</small>
-                <strong>{recommendations.length}</strong>
+                <strong>{visibleRecommendations.length}</strong>
                 <p>Scholarship opportunities ranked for your profile.</p>
               </div>
               <div className="scholarship-stat-row">
@@ -92,11 +100,12 @@ export default function ScholarshipFinder() {
             <div className="scholarship-profile-summary">
               <div className="scholarship-profile-summary__head">
                 <h3>Profile Used For Matching</h3>
-                <p>Complete academic background and preferences for better scholarship fit.</p>
+                <p>The recommendation engine compares this profile against scholarship rules set for each university.</p>
               </div>
               <div className="scholarship-profile-summary__chips">
                 <span><strong>GPA</strong> {profileUsed.gpa || "-"}</span>
                 <span><strong>IELTS</strong> {profileUsed.ielts_score || "-"}</span>
+                <span><strong>SAT</strong> {profileUsed.sat_score || "-"}</span>
                 <span><strong>TOEFL</strong> {profileUsed.toefl_score || "-"}</span>
                 <span><strong>GRE</strong> {profileUsed.gre_score || "-"}</span>
                 <span><strong>GMAT</strong> {profileUsed.gmat_score || "-"}</span>
@@ -125,7 +134,7 @@ export default function ScholarshipFinder() {
                     <strong>{topMatch.scholarship_name}</strong>
                   </div>
                   <div>
-                    <span>Coverage</span>
+                    <span>Amount / Coverage</span>
                     <strong>{topMatch.estimated_coverage}</strong>
                   </div>
                   <div>
@@ -139,6 +148,9 @@ export default function ScholarshipFinder() {
                       <span key={reason} className="scholarship-reason-pill">{reason}</span>
                     ))}
                   </div>
+                )}
+                {topMatch.scholarship_eligibility_note && (
+                  <p className="scholarship-card__note">{topMatch.scholarship_eligibility_note}</p>
                 )}
                 <div className="scholarship-card__actions">
                   <Link to={`/universities/${topMatch.university_id}`} className="scholarship-btn">
@@ -157,13 +169,47 @@ export default function ScholarshipFinder() {
             </section>
           )}
 
-          {loading && <p className="scholarship-state">Loading scholarship matches...</p>}
-          {!loading && error && <p className="scholarship-state scholarship-state--error">{error}</p>}
-          {!loading && !error && recommendations.length === 0 && (
-            <p className="scholarship-state">No scholarship matches found yet. Complete academic and preferences profile.</p>
+          {loading && (
+            <div className="app-state-card app-state-card--loading">
+              <div className="app-skeleton app-skeleton--title" />
+              <div className="app-skeleton app-skeleton--line" />
+              <div className="app-skeleton app-skeleton--line" />
+              <div className="scholarship-grid scholarship-grid--skeleton">
+                {[1, 2, 3].map((item) => (
+                  <div key={item} className="scholarship-card scholarship-card--skeleton">
+                    <div className="app-skeleton app-skeleton--block" />
+                    <div className="scholarship-card__body">
+                      <div className="app-skeleton app-skeleton--line" />
+                      <div className="app-skeleton app-skeleton--line short" />
+                      <div className="app-skeleton app-skeleton--line" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {!loading && error && (
+            <div className="app-state-card app-state-card--error">
+              <h3>Scholarship data could not be loaded</h3>
+              <p>{error}</p>
+            </div>
+          )}
+          {!loading && !error && visibleRecommendations.length === 0 && (
+            <div className="app-state-card">
+              <h3>{blockedByGpa ? "Scholarships are not available below GPA 3.0" : "No scholarship matches yet"}</h3>
+              <p>
+                {blockedByGpa
+                  ? (eligibilityMessage || "Update your GPA to 3.0 or above to view scholarship matches.")
+                  : "Add your academic scores, target countries, and study preferences first. Scholarships will appear here once your profile matches the eligibility rules set for a university."}
+              </p>
+              <div className="app-state-card__actions">
+                <Link to="/profile/academic" className="scholarship-btn">Update academic profile</Link>
+                <Link to="/profile/preferences" className="scholarship-btn scholarship-btn--ghost">Update preferences</Link>
+              </div>
+            </div>
           )}
 
-          {!loading && !error && recommendations.length > 0 && (
+          {!loading && !error && visibleRecommendations.length > 0 && (
             <>
               <div className="scholarship-list-head">
                 <div>
@@ -172,12 +218,12 @@ export default function ScholarshipFinder() {
                 </div>
                 <div className="scholarship-list-head__count">
                   <span>Total matches</span>
-                  <strong>{recommendations.length}</strong>
+                  <strong>{visibleRecommendations.length}</strong>
                 </div>
               </div>
 
               <div className="scholarship-grid">
-                {recommendations.map((item, index) => {
+                {visibleRecommendations.map((item, index) => {
                   const fitScore = Math.max(0, Math.min(100, Number(item.fit_score) || 0));
                   const fitBand =
                     fitScore >= 85 ? "Excellent Fit" : fitScore >= 70 ? "Strong Fit" : fitScore >= 55 ? "Good Fit" : "Possible Fit";
@@ -213,10 +259,27 @@ export default function ScholarshipFinder() {
                             <strong>{item.scholarship_name}</strong>
                           </div>
                           <div>
-                            <span>Coverage</span>
+                            <span>Amount / Coverage</span>
                             <strong>{item.estimated_coverage}</strong>
                           </div>
                         </div>
+
+                        {(item.minimum_ielts_score || item.minimum_sat_score) && (
+                          <div className="scholarship-card__detail-grid scholarship-card__detail-grid--criteria">
+                            {item.minimum_ielts_score ? (
+                              <div>
+                                <span>Minimum IELTS</span>
+                                <strong>{item.minimum_ielts_score}</strong>
+                              </div>
+                            ) : null}
+                            {item.minimum_sat_score ? (
+                              <div>
+                                <span>Minimum SAT</span>
+                                <strong>{item.minimum_sat_score}</strong>
+                              </div>
+                            ) : null}
+                          </div>
+                        )}
 
                         {item.match_reasons?.length > 0 && (
                           <div className="scholarship-card__reasons">
@@ -228,7 +291,9 @@ export default function ScholarshipFinder() {
                           </div>
                         )}
 
-                        <p className="scholarship-card__note">{item.note}</p>
+                        <p className="scholarship-card__note">
+                          {item.scholarship_eligibility_note || item.note}
+                        </p>
                         <div className="scholarship-card__actions">
                           <Link to={`/universities/${item.university_id}`} className="scholarship-btn">View University</Link>
                           <a

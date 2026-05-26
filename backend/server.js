@@ -3,12 +3,32 @@ import cors from "cors";
 import dotenv from "dotenv";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
-import nodemailer from "nodemailer";
 import multer from "multer";
 import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
+import crypto from "crypto";
 import { db } from "./db.js";
+import { createAuthGuards } from "./middleware/auth.js";
+import { createEmailService, generateOtp } from "./services/emailService.js";
+import { createScholarshipNotificationService } from "./services/scholarshipNotificationService.js";
+import { createAuthController } from "./controllers/authController.js";
+import { createExpenseController } from "./controllers/expenseController.js";
+import { createCounselingController } from "./controllers/counselingController.js";
+import { createAdminController } from "./controllers/adminController.js";
+import { createProfileController } from "./controllers/profileController.js";
+import { createDocumentController } from "./controllers/documentController.js";
+import { createSettingsController } from "./controllers/settingsController.js";
+import { createUniversityController } from "./controllers/universityController.js";
+import { registerAuthRoutes } from "./routes/authRoutes.js";
+import { registerExpenseRoutes } from "./routes/expenseRoutes.js";
+import { registerCounselingRoutes } from "./routes/counselingRoutes.js";
+import { registerAdminRoutes } from "./routes/adminRoutes.js";
+import { registerProfileRoutes } from "./routes/profileRoutes.js";
+import { registerDocumentRoutes } from "./routes/documentRoutes.js";
+import { registerSettingsRoutes } from "./routes/settingsRoutes.js";
+import { registerUniversityRoutes } from "./routes/universityRoutes.js";
+import { toNumber } from "./utils/number.js";
 
 dotenv.config();
 
@@ -28,59 +48,188 @@ app.use(express.json());
 
 
 // ✅ middleware
-app.use(
-  cors({
-    origin: ["http://localhost:5173", "http://localhost:5174", "http://localhost:5175", "http://localhost:5176", "http://localhost:5177"],
-    credentials: true,
-  })
-);
-app.use(express.json());
+const emailService = createEmailService();
+const { sendOtpEmail, sendResetEmail, sendScholarshipAlertEmail } = emailService;
 
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: {
-    user: process.env.GMAIL_USER,
-    pass: process.env.GMAIL_APP_PASSWORD,
-  },
-});
+const {
+  scholarshipTextChanged,
+  notifyUsersAboutScholarshipUpdate,
+} = createScholarshipNotificationService({ db, sendScholarshipAlertEmail });
 
-const generateOtp = () => String(Math.floor(100000 + Math.random() * 900000));
-
-const sendOtpEmail = async (email, code) => {
-  await transporter.sendMail({
-    from: `EduVoyage <${process.env.GMAIL_USER}>`,
-    to: email,
-    subject: "Your EduVoyage verification code",
-    text: `Your verification code is ${code}. It expires in 10 minutes.`,
-  });
-};
-
-const sendResetEmail = async (email, code) => {
-  await transporter.sendMail({
-    from: `EduVoyage <${process.env.GMAIL_USER}>`,
-    to: email,
-    subject: "EduVoyage password reset code",
-    text: `Your password reset code is ${code}. It expires in 10 minutes.`,
-  });
-};
 
 const uploadsDir = path.join(__dirname, "uploads");
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
+const privateVaultRoot = path.join(__dirname, "private_uploads");
+const documentVaultDir = path.join(privateVaultRoot, "document_vault");
+if (!fs.existsSync(documentVaultDir)) {
+  fs.mkdirSync(documentVaultDir, { recursive: true });
+}
+
+const ALLOWED_DOCUMENT_MIME_TYPES = new Set([
+  "application/pdf",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+]);
+
+const MAX_DOCUMENT_SIZE_BYTES = 10 * 1024 * 1024;
+
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadsDir),
+  destination: (req, file, cb) => cb(null, documentVaultDir),
   filename: (req, file, cb) => {
-    const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_");
-    const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-    cb(null, `${unique}-${safeName}`);
+    const extension = path.extname(file.originalname || "").replace(/[^a-zA-Z0-9.]/g, "").toLowerCase();
+    const unique = `${Date.now()}-${crypto.randomBytes(12).toString("hex")}`;
+    cb(null, `${unique}${extension}`);
   },
 });
 
-const upload = multer({ storage });
+const upload = multer({
+  storage,
+  limits: { fileSize: MAX_DOCUMENT_SIZE_BYTES },
+  fileFilter: (req, file, cb) => {
+    if (!ALLOWED_DOCUMENT_MIME_TYPES.has(file.mimetype)) {
+      return cb(new Error("Unsupported document type"));
+    }
+    return cb(null, true);
+  },
+});
 
 app.use("/uploads", express.static(uploadsDir));
+
+const formatFileSize = (bytes = 0) => `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+
+const sanitizeDocumentType = (value = "", customValue = "") => {
+  const normalized = String(value || "").trim().toLowerCase();
+  const customNormalized = String(customValue || "")
+    .replace(/[^a-zA-Z0-9\s().,&/-]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 60);
+
+  const allowed = {
+    passport: "Passport",
+    transcript: "Transcript",
+    certificate: "Certificate",
+    school_leaving_certificate: "School Leaving Certificate",
+    marksheet: "Marksheet",
+    character_certificate: "Character Certificate",
+    ielts: "IELTS",
+    toefl: "TOEFL",
+    sat: "SAT",
+    financial: "Financial Document",
+    visa: "Visa",
+    resume: "Resume / CV",
+    recommendation: "Recommendation Letter",
+    sop: "Statement of Purpose",
+    lor: "Letter of Recommendation",
+    other: customNormalized || "Other",
+    custom: customNormalized || "Other",
+  };
+
+  return allowed[normalized] || customNormalized || "Other";
+};
+
+const buildDocumentDownloadUrl = (documentId) => `/api/profile/documents/${documentId}/download`;
+
+const signAuthToken = (user) =>
+  jwt.sign(
+    { id: user.id, email: user.email, full_name: user.full_name, role: user.role },
+    process.env.JWT_SECRET,
+    { expiresIn: "7d" }
+  );
+
+const verifyGoogleIdToken = async (idToken) => {
+  const response = await fetch(
+    `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`
+  );
+
+  if (!response.ok) {
+    throw new Error("Google token verification failed");
+  }
+
+  const payload = await response.json();
+
+  if (!payload?.email || payload.email_verified !== "true") {
+    throw new Error("Google account email is not verified");
+  }
+
+  const allowedClientId = process.env.GOOGLE_CLIENT_ID;
+  if (allowedClientId && payload.aud !== allowedClientId) {
+    throw new Error("Google client ID mismatch");
+  }
+
+  return payload;
+};
+
+const getDocumentVaultPinHash = async (userId) => {
+  await ensureSettingsTable();
+  const [[row]] = await db.query(
+    `SELECT document_vault_pin_hash
+     FROM user_settings
+     WHERE user_id = ?`,
+    [userId]
+  );
+  return row?.document_vault_pin_hash || null;
+};
+
+const verifyDocumentVaultPin = async (userId, pin) => {
+  const storedHash = await getDocumentVaultPinHash(userId);
+  if (!storedHash) return true;
+
+  const normalizedPin = String(pin || "").trim();
+  if (!normalizedPin) return false;
+
+  return bcrypt.compare(normalizedPin, storedHash);
+};
+
+const requireDocumentVaultPin = async (req, res) => {
+  if (req.user?.role === "admin" || req.user?.role === "agent") {
+    return true;
+  }
+
+  const storedHash = await getDocumentVaultPinHash(req.user.id);
+  if (!storedHash) {
+    return true;
+  }
+
+  const pin = String(req.headers["x-vault-pin"] || "").trim();
+  if (!pin) {
+    res.status(423).json({ message: "Document vault PIN required." });
+    return false;
+  }
+
+  const ok = await bcrypt.compare(pin, storedHash);
+  if (!ok) {
+    res.status(403).json({ message: "Invalid document vault PIN." });
+    return false;
+  }
+
+  return true;
+};
+
+const documentVaultPinMiddleware = async (req, res, next) => {
+  if (!(await requireDocumentVaultPin(req, res))) {
+    return;
+  }
+  next();
+};
+
+const resolveDocumentAbsolutePath = (document) => {
+  if (document?.stored_name) {
+    return path.join(documentVaultDir, document.stored_name);
+  }
+
+  if (document?.file_url && document.file_url.startsWith("/uploads/")) {
+    return path.join(uploadsDir, path.basename(document.file_url));
+  }
+
+  return "";
+};
 
 const countryImages = {
   USA: "https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=1200&h=800&fit=crop",
@@ -161,6 +310,7 @@ const buildSeedUniversities = () => {
 
 const seedUniversities = async () => {
   try {
+    await ensureUniversitiesTable();
     const [rows] = await db.query("SELECT COUNT(*) AS count FROM universities");
     if (rows[0].count > 0) return;
 
@@ -176,6 +326,12 @@ const seedUniversities = async () => {
       u.fees,
       u.facilities,
       u.scholarships,
+      u.scholarship_name || null,
+      u.scholarship_amount || null,
+      u.scholarship_type || null,
+      u.scholarship_eligibility_note || null,
+      u.min_ielts_score || null,
+      u.min_sat_score || null,
       u.admissions,
       u.location,
       u.contact,
@@ -184,17 +340,101 @@ const seedUniversities = async () => {
 
     await db.query(
       `INSERT INTO universities
-        (name, country, city, ranking, website, overview, courses, fees, facilities, scholarships, admissions, location, contact, image_url)
+        (name, country, city, ranking, website, overview, courses, fees, facilities, scholarships,
+         scholarship_name, scholarship_amount, scholarship_type, scholarship_eligibility_note,
+         min_ielts_score, min_sat_score, admissions, location, contact, image_url)
        VALUES ?`,
       [values]
     );
   } catch (err) {
+    if (err?.errno === 1932 || String(err?.sqlMessage || "").includes("doesn't exist in engine")) {
+      try {
+        await db.query("DROP TABLE IF EXISTS universities");
+        await ensureUniversitiesTable();
+
+        const seed = buildSeedUniversities();
+        const values = seed.map((u) => [
+          u.name,
+          u.country,
+          u.city,
+          u.ranking,
+          u.website,
+          u.overview,
+          u.courses,
+          u.fees,
+          u.facilities,
+          u.scholarships,
+          u.scholarship_name || null,
+          u.scholarship_amount || null,
+          u.scholarship_type || null,
+          u.scholarship_eligibility_note || null,
+          u.min_ielts_score || null,
+          u.min_sat_score || null,
+          u.admissions,
+          u.location,
+          u.contact,
+          u.image_url,
+        ]);
+
+        await db.query(
+          `INSERT INTO universities
+            (name, country, city, ranking, website, overview, courses, fees, facilities, scholarships,
+             scholarship_name, scholarship_amount, scholarship_type, scholarship_eligibility_note,
+             min_ielts_score, min_sat_score, admissions, location, contact, image_url)
+           VALUES ?`,
+          [values]
+        );
+        console.log(`Recreated and seeded ${seed.length} universities.`);
+        return;
+      } catch (recoveryErr) {
+        console.error("UNIVERSITY SEED RECOVERY ERROR:", recoveryErr);
+      }
+    }
     console.error("UNIVERSITY SEED ERROR:", err);
+  }
+};
+
+const ensureUniversitiesTable = async () => {
+  try {
+    await db.query(
+      `CREATE TABLE IF NOT EXISTS universities (
+        id INT NOT NULL AUTO_INCREMENT,
+        name VARCHAR(200) NOT NULL,
+        country VARCHAR(100) NOT NULL,
+        city VARCHAR(100) NULL,
+        ranking INT NULL,
+        website VARCHAR(255) NULL,
+        overview TEXT NULL,
+        courses TEXT NULL,
+        fees TEXT NULL,
+        facilities TEXT NULL,
+        scholarships TEXT NULL,
+        scholarship_name VARCHAR(255) NULL,
+        scholarship_amount DECIMAL(10,2) NULL,
+        scholarship_type VARCHAR(40) NULL,
+        scholarship_eligibility_note TEXT NULL,
+        min_ielts_score DECIMAL(3,1) NULL,
+        min_sat_score INT NULL,
+        admissions TEXT NULL,
+        location VARCHAR(150) NULL,
+        contact VARCHAR(150) NULL,
+        image_url VARCHAR(255) NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (id)
+      )`
+    );
+  } catch (err) {
+    console.error("UNIVERSITIES TABLE ERROR:", err);
   }
 };
 
 const ensureSettingsTable = async () => {
   try {
+    await db.query(
+      `ALTER TABLE users
+       ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP NULL DEFAULT NULL`
+    );
+
     await db.query(
       `CREATE TABLE IF NOT EXISTS user_settings (
         user_id INT NOT NULL,
@@ -202,6 +442,26 @@ const ensureSettingsTable = async () => {
         scholarship_alerts TINYINT(1) NOT NULL DEFAULT 1,
         marketing_updates TINYINT(1) NOT NULL DEFAULT 0,
         preferred_currency VARCHAR(10) NOT NULL DEFAULT 'USD',
+        counseling_reply_alerts TINYINT(1) NOT NULL DEFAULT 1,
+        document_review_alerts TINYINT(1) NOT NULL DEFAULT 1,
+        expense_reminder_alerts TINYINT(1) NOT NULL DEFAULT 0,
+        show_profile_to_agent TINYINT(1) NOT NULL DEFAULT 1,
+        allow_agent_email_contact TINYINT(1) NOT NULL DEFAULT 1,
+        allow_profile_matching TINYINT(1) NOT NULL DEFAULT 1,
+        preferred_country_default VARCHAR(100) NULL,
+        default_language VARCHAR(40) NOT NULL DEFAULT 'English',
+        default_intake_session VARCHAR(60) NULL,
+        monthly_budget_target DECIMAL(10,2) NULL,
+        include_part_time_income TINYINT(1) NOT NULL DEFAULT 1,
+        expense_reminder_day INT NULL,
+        allowed_document_reminder TINYINT(1) NOT NULL DEFAULT 0,
+        auto_lock_vault_on_logout TINYINT(1) NOT NULL DEFAULT 1,
+        document_upload_reminder TINYINT(1) NOT NULL DEFAULT 0,
+        phone_number VARCHAR(40) NULL,
+        emergency_contact VARCHAR(120) NULL,
+        profile_photo_url VARCHAR(255) NULL,
+        document_vault_pin_hash VARCHAR(255) NULL,
+        document_vault_pin_updated_at TIMESTAMP NULL DEFAULT NULL,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         PRIMARY KEY (user_id),
         CONSTRAINT fk_user_settings_user
@@ -210,8 +470,297 @@ const ensureSettingsTable = async () => {
           ON DELETE CASCADE
       )`
     );
+
+    await db.query(
+      `ALTER TABLE user_settings
+       ADD COLUMN IF NOT EXISTS counseling_reply_alerts TINYINT(1) NOT NULL DEFAULT 1,
+       ADD COLUMN IF NOT EXISTS document_review_alerts TINYINT(1) NOT NULL DEFAULT 1,
+       ADD COLUMN IF NOT EXISTS expense_reminder_alerts TINYINT(1) NOT NULL DEFAULT 0,
+       ADD COLUMN IF NOT EXISTS show_profile_to_agent TINYINT(1) NOT NULL DEFAULT 1,
+       ADD COLUMN IF NOT EXISTS allow_agent_email_contact TINYINT(1) NOT NULL DEFAULT 1,
+       ADD COLUMN IF NOT EXISTS allow_profile_matching TINYINT(1) NOT NULL DEFAULT 1,
+       ADD COLUMN IF NOT EXISTS preferred_country_default VARCHAR(100) NULL,
+       ADD COLUMN IF NOT EXISTS default_language VARCHAR(40) NOT NULL DEFAULT 'English',
+       ADD COLUMN IF NOT EXISTS default_intake_session VARCHAR(60) NULL,
+       ADD COLUMN IF NOT EXISTS monthly_budget_target DECIMAL(10,2) NULL,
+       ADD COLUMN IF NOT EXISTS include_part_time_income TINYINT(1) NOT NULL DEFAULT 1,
+       ADD COLUMN IF NOT EXISTS expense_reminder_day INT NULL,
+       ADD COLUMN IF NOT EXISTS allowed_document_reminder TINYINT(1) NOT NULL DEFAULT 0,
+       ADD COLUMN IF NOT EXISTS auto_lock_vault_on_logout TINYINT(1) NOT NULL DEFAULT 1,
+       ADD COLUMN IF NOT EXISTS document_upload_reminder TINYINT(1) NOT NULL DEFAULT 0,
+       ADD COLUMN IF NOT EXISTS phone_number VARCHAR(40) NULL,
+       ADD COLUMN IF NOT EXISTS emergency_contact VARCHAR(120) NULL,
+       ADD COLUMN IF NOT EXISTS profile_photo_url VARCHAR(255) NULL,
+       ADD COLUMN IF NOT EXISTS document_vault_pin_hash VARCHAR(255) NULL,
+       ADD COLUMN IF NOT EXISTS document_vault_pin_updated_at TIMESTAMP NULL DEFAULT NULL`
+    );
   } catch (err) {
     console.error("SETTINGS TABLE ERROR:", err);
+  }
+};
+
+const ensureScholarshipCriteriaColumns = async () => {
+  try {
+    await db.query(
+      `ALTER TABLE universities
+       ADD COLUMN IF NOT EXISTS min_ielts_score DECIMAL(3,1) NULL,
+       ADD COLUMN IF NOT EXISTS min_sat_score INT NULL,
+       ADD COLUMN IF NOT EXISTS scholarship_name VARCHAR(255) NULL,
+       ADD COLUMN IF NOT EXISTS scholarship_amount DECIMAL(10,2) NULL,
+       ADD COLUMN IF NOT EXISTS scholarship_type VARCHAR(40) NULL,
+       ADD COLUMN IF NOT EXISTS scholarship_eligibility_note TEXT NULL`
+    );
+
+    await db.query(
+      `ALTER TABLE user_academics
+       ADD COLUMN IF NOT EXISTS sat_score VARCHAR(20) NULL`
+    );
+  } catch (err) {
+    console.error("SCHOLARSHIP CRITERIA COLUMN ERROR:", err);
+  }
+};
+
+const ensureExpensePlansTable = async () => {
+  try {
+    await db.query(
+      `CREATE TABLE IF NOT EXISTS expense_plans (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        university_id INT NOT NULL,
+        applied TINYINT(1) NOT NULL DEFAULT 0,
+        planner_stage VARCHAR(20) NOT NULL DEFAULT 'before-applying',
+        has_arrived TINYINT(1) NULL,
+        works_part_time TINYINT(1) NULL,
+        weekly_income DECIMAL(10,2) NULL,
+        application_fee DECIMAL(10,2) NULL,
+        transcript_fee DECIMAL(10,2) NULL,
+        english_test_fee DECIMAL(10,2) NULL,
+        visa_fee DECIMAL(10,2) NULL,
+        courier_fee DECIMAL(10,2) NULL,
+        deposit_fee DECIMAL(10,2) NULL,
+        semester_fee DECIMAL(10,2) NULL,
+        monthly_rent DECIMAL(10,2) NULL,
+        monthly_insurance DECIMAL(10,2) NULL,
+        monthly_food DECIMAL(10,2) NULL,
+        monthly_transport DECIMAL(10,2) NULL,
+        monthly_utilities DECIMAL(10,2) NULL,
+        other_fee DECIMAL(10,2) NULL,
+        other_note TEXT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_expense_plan_user_university (user_id, university_id),
+        CONSTRAINT fk_expense_plans_user
+          FOREIGN KEY (user_id)
+          REFERENCES users(id)
+          ON DELETE CASCADE,
+        CONSTRAINT fk_expense_plans_university
+          FOREIGN KEY (university_id)
+          REFERENCES universities(id)
+          ON DELETE CASCADE
+      )`
+    );
+
+    await db.query(
+      `ALTER TABLE expense_plans
+       ADD COLUMN IF NOT EXISTS planner_stage VARCHAR(20) NOT NULL DEFAULT 'before-applying',
+       ADD COLUMN IF NOT EXISTS has_arrived TINYINT(1) NULL,
+       ADD COLUMN IF NOT EXISTS works_part_time TINYINT(1) NULL,
+       ADD COLUMN IF NOT EXISTS weekly_income DECIMAL(10,2) NULL`
+    );
+
+    await db.query(
+      `ALTER TABLE expense_plans
+       MODIFY COLUMN planner_stage VARCHAR(20) NOT NULL DEFAULT 'before-applying'`
+    );
+  } catch (err) {
+    console.error("EXPENSE PLANS TABLE ERROR:", err);
+  }
+};
+
+const ensureExpenseEntriesTable = async () => {
+  try {
+    await db.query(
+      `CREATE TABLE IF NOT EXISTS expense_entries (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        university_id INT NOT NULL,
+        entry_type VARCHAR(20) NOT NULL DEFAULT 'expense',
+        category VARCHAR(60) NOT NULL,
+        amount DECIMAL(10,2) NOT NULL,
+        month VARCHAR(7) NOT NULL,
+        note TEXT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        CONSTRAINT fk_expense_entries_user
+          FOREIGN KEY (user_id)
+          REFERENCES users(id)
+          ON DELETE CASCADE,
+        CONSTRAINT fk_expense_entries_university
+          FOREIGN KEY (university_id)
+          REFERENCES universities(id)
+          ON DELETE CASCADE
+      )`
+    );
+
+    await db.query(
+      `ALTER TABLE expense_entries
+       ADD COLUMN IF NOT EXISTS entry_type VARCHAR(20) NOT NULL DEFAULT 'expense'`
+    );
+  } catch (err) {
+    console.error("EXPENSE ENTRIES TABLE ERROR:", err);
+  }
+};
+
+const ensureDocumentReviewColumns = async () => {
+  try {
+    await db.query(
+      `ALTER TABLE user_documents
+       ADD COLUMN IF NOT EXISTS review_status VARCHAR(20) NOT NULL DEFAULT 'pending',
+       ADD COLUMN IF NOT EXISTS review_comment TEXT NULL,
+       ADD COLUMN IF NOT EXISTS reviewed_by INT NULL,
+       ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMP NULL DEFAULT NULL`
+    );
+  } catch (err) {
+    console.error("DOCUMENT REVIEW COLUMN ERROR:", err);
+  }
+};
+
+const ensureDocumentVaultColumns = async () => {
+  try {
+    await db.query(
+      `ALTER TABLE user_documents
+       ADD COLUMN IF NOT EXISTS stored_name VARCHAR(255) NULL,
+       ADD COLUMN IF NOT EXISTS file_size_bytes BIGINT NULL,
+       ADD COLUMN IF NOT EXISTS file_hash VARCHAR(128) NULL,
+       ADD COLUMN IF NOT EXISTS document_type VARCHAR(60) NOT NULL DEFAULT 'other',
+       ADD COLUMN IF NOT EXISTS storage_scope VARCHAR(30) NOT NULL DEFAULT 'vault'`
+    );
+  } catch (err) {
+    console.error("DOCUMENT VAULT COLUMN ERROR:", err);
+  }
+};
+
+const ensureApplicationsTable = async () => {
+  try {
+    const [existingTables] = await db.query("SHOW TABLES LIKE 'applications'");
+    if (existingTables.length > 0) {
+      const [columns] = await db.query("SHOW COLUMNS FROM applications");
+      const columnNames = new Set(columns.map((column) => column.Field));
+
+      if (!columnNames.has("university_id")) {
+        const [[countRow]] = await db.query("SELECT COUNT(*) AS count FROM applications");
+        if ((countRow?.count || 0) === 0) {
+          await db.query("DROP TABLE applications");
+        } else {
+          throw new Error("Legacy applications table detected with existing rows. Manual migration is required.");
+        }
+      }
+    }
+
+    await db.query(
+      `CREATE TABLE IF NOT EXISTS applications (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        university_id INT NOT NULL,
+        status VARCHAR(40) NOT NULL DEFAULT 'applying',
+        source VARCHAR(40) NOT NULL DEFAULT 'student_portal',
+        notes TEXT NULL,
+        submitted_at TIMESTAMP NULL DEFAULT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_application_user_university (user_id, university_id),
+        CONSTRAINT fk_applications_user
+          FOREIGN KEY (user_id)
+          REFERENCES users(id)
+          ON DELETE CASCADE,
+        CONSTRAINT fk_applications_university
+          FOREIGN KEY (university_id)
+          REFERENCES universities(id)
+          ON DELETE CASCADE
+      )`
+    );
+
+    await db.query(
+      `ALTER TABLE applications
+       MODIFY COLUMN status VARCHAR(40) NOT NULL DEFAULT 'applying'`
+    );
+  } catch (err) {
+    console.error("APPLICATIONS TABLE ERROR:", err);
+  }
+};
+
+const ensureCounselingRequestsTable = async () => {
+  try {
+    await db.query(
+      `CREATE TABLE IF NOT EXISTS counseling_requests (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        topic VARCHAR(180) NOT NULL,
+        message TEXT NOT NULL,
+        preferred_country VARCHAR(100) NULL,
+        priority VARCHAR(30) NOT NULL DEFAULT 'normal',
+        status VARCHAR(30) NOT NULL DEFAULT 'pending',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        CONSTRAINT fk_counseling_requests_user
+          FOREIGN KEY (user_id)
+          REFERENCES users(id)
+          ON DELETE CASCADE
+      )`
+    );
+  } catch (err) {
+    console.error("COUNSELING REQUESTS TABLE ERROR:", err);
+  }
+};
+
+const ensureUniversityAuditLogsTable = async () => {
+  try {
+    await db.query(
+      `CREATE TABLE IF NOT EXISTS university_audit_logs (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        university_id INT NOT NULL,
+        action VARCHAR(20) NOT NULL,
+        editor_user_id INT NOT NULL,
+        editor_role VARCHAR(30) NULL,
+        changed_fields TEXT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT fk_university_audit_logs_university
+          FOREIGN KEY (university_id)
+          REFERENCES universities(id)
+          ON DELETE CASCADE,
+        CONSTRAINT fk_university_audit_logs_user
+          FOREIGN KEY (editor_user_id)
+          REFERENCES users(id)
+          ON DELETE CASCADE
+      )`
+    );
+  } catch (err) {
+    console.error("UNIVERSITY AUDIT TABLE ERROR:", err);
+  }
+};
+
+const logUniversityAudit = async ({
+  universityId,
+  action,
+  editorUserId,
+  editorRole,
+  changedFields = [],
+}) => {
+  try {
+    await db.query(
+      `INSERT INTO university_audit_logs
+        (university_id, action, editor_user_id, editor_role, changed_fields)
+       VALUES (?, ?, ?, ?, ?)`,
+      [
+        universityId,
+        action,
+        editorUserId,
+        editorRole || null,
+        changedFields.length ? JSON.stringify(changedFields) : null,
+      ]
+    );
+  } catch (err) {
+    console.error("UNIVERSITY AUDIT INSERT ERROR:", err);
   }
 };
 
@@ -243,1301 +792,108 @@ app.get("/api/health/db", async (req, res) => {
 });
 
 // ✅ JWT Middleware
-const authMiddleware = (req, res, next) => {
-  const header = req.headers.authorization;
-  const token = header?.startsWith("Bearer ") ? header.split(" ")[1] : null;
-
-  if (!token) return res.status(401).json({ message: "Missing token" });
-
-  try {
-    req.user = jwt.verify(token, process.env.JWT_SECRET);
-    next();
-  } catch (err) {
-    return res.status(403).json({ message: "Invalid token" });
-  }
-};
-
-const requireAdmin = async (req, res, next) => {
-  try {
-    const [rows] = await db.query(
-      "SELECT role, is_active FROM users WHERE id = ?",
-      [req.user.id]
-    );
-
-    if (rows.length === 0) {
-      return res.status(403).json({ message: "Access denied" });
-    }
-
-    if (!rows[0].is_active) {
-      return res.status(403).json({ message: "Account is inactive" });
-    }
-
-    if (rows[0].role !== "admin") {
-      return res.status(403).json({ message: "Admin access required" });
-    }
-
-    next();
-  } catch (err) {
-    console.error("ADMIN CHECK ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
-};
-
-const requireAgent = async (req, res, next) => {
-  try {
-    const [rows] = await db.query(
-      "SELECT role, is_active FROM users WHERE id = ?",
-      [req.user.id]
-    );
-
-    if (rows.length === 0) {
-      return res.status(403).json({ message: "Access denied" });
-    }
-
-    if (!rows[0].is_active) {
-      return res.status(403).json({ message: "Account is inactive" });
-    }
-
-    if (rows[0].role !== "agent") {
-      return res.status(403).json({ message: "Agent access required" });
-    }
-
-    next();
-  } catch (err) {
-    console.error("AGENT CHECK ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
-};
-
-const requireAgentOrAdmin = async (req, res, next) => {
-  try {
-    const [rows] = await db.query(
-      "SELECT role, is_active FROM users WHERE id = ?",
-      [req.user.id]
-    );
-
-    if (rows.length === 0) {
-      return res.status(403).json({ message: "Access denied" });
-    }
-
-    if (!rows[0].is_active) {
-      return res.status(403).json({ message: "Account is inactive" });
-    }
-
-    if (rows[0].role !== "agent" && rows[0].role !== "admin") {
-      return res.status(403).json({ message: "Agent access required" });
-    }
-
-    next();
-  } catch (err) {
-    console.error("AGENT CHECK ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
-};
-
-// ✅ SIGNUP
-app.post("/api/auth/signup", async (req, res) => {
-  try {
-    const { full_name, email, password } = req.body;
-
-    if (!full_name || !email || !password) {
-      return res
-        .status(400)
-        .json({ message: "full_name, email, password are required" });
-    }
-
-    const [exists] = await db.query("SELECT id FROM users WHERE email = ?", [
-      email,
-    ]);
-    if (exists.length > 0) {
-      return res.status(409).json({ message: "Email already registered" });
-    }
-
-    const password_hash = await bcrypt.hash(password, 10);
-
-    const otpCode = generateOtp();
-
-    await db.query(
-      `INSERT INTO signup_otps (email, full_name, password_hash, otp_code, otp_expires_at)
-       VALUES (?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 10 MINUTE))
-       ON DUPLICATE KEY UPDATE
-         full_name = VALUES(full_name),
-         password_hash = VALUES(password_hash),
-         otp_code = VALUES(otp_code),
-         otp_expires_at = VALUES(otp_expires_at)`,
-      [email, full_name, password_hash, otpCode]
-    );
-
-    await sendOtpEmail(email, otpCode);
-
-    return res.status(201).json({
-      message: "OTP sent to your email. Please verify to complete signup.",
-    });
-  } catch (err) {
-    console.error("SIGNUP ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
+const { authMiddleware, requireAdmin, requireAgentOrAdmin } = createAuthGuards(db);
+const authController = createAuthController({
+  db,
+  generateOtp,
+  sendOtpEmail,
+  sendResetEmail,
+  signAuthToken,
+  verifyGoogleIdToken,
 });
-
-// バ. VERIFY OTP
-app.post("/api/auth/verify-otp", async (req, res) => {
-  try {
-    const { email, otp } = req.body;
-
-    if (!email || !otp) {
-      return res.status(400).json({ message: "email and otp are required" });
-    }
-
-    const [rows] = await db.query(
-      `SELECT email, full_name, password_hash
-       FROM signup_otps
-       WHERE email = ? AND otp_code = ? AND otp_expires_at > NOW()`,
-      [email, otp]
-    );
-
-    if (rows.length === 0) {
-      return res.status(400).json({ message: "Invalid or expired OTP" });
-    }
-
-    const record = rows[0];
-
-    const [result] = await db.query(
-      "INSERT INTO users (full_name, email, password_hash) VALUES (?, ?, ?)",
-      [record.full_name, record.email, record.password_hash]
-    );
-
-    await db.query("DELETE FROM signup_otps WHERE email = ?", [email]);
-
-    return res.json({ message: "Email verified. You can now log in.", userId: result.insertId });
-  } catch (err) {
-    console.error("VERIFY OTP ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
+const adminController = createAdminController({ db, buildDocumentDownloadUrl });
+const profileController = createProfileController({ db });
+const documentController = createDocumentController({
+  db,
+  bcrypt,
+  fs,
+  crypto,
+  ensureSettingsTable,
+  getDocumentVaultPinHash,
+  verifyDocumentVaultPin,
+  requireDocumentVaultPin,
+  resolveDocumentAbsolutePath,
+  sanitizeDocumentType,
+  formatFileSize,
+  buildDocumentDownloadUrl,
 });
-
-// バ. RESEND OTP
-app.post("/api/auth/resend-otp", async (req, res) => {
-  try {
-    const { email } = req.body;
-    if (!email) {
-      return res.status(400).json({ message: "email is required" });
-    }
-
-    const [rows] = await db.query(
-      "SELECT email FROM signup_otps WHERE email = ?",
-      [email]
-    );
-
-    if (rows.length === 0) {
-      return res.status(404).json({ message: "No pending signup found" });
-    }
-
-    const otpCode = generateOtp();
-
-    await db.query(
-      `UPDATE signup_otps
-       SET otp_code = ?, otp_expires_at = DATE_ADD(NOW(), INTERVAL 10 MINUTE)
-       WHERE email = ?`,
-      [otpCode, email]
-    );
-
-    await sendOtpEmail(email, otpCode);
-
-    return res.json({ message: "OTP resent to your email." });
-  } catch (err) {
-    console.error("RESEND OTP ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
+const settingsController = createSettingsController({
+  db,
+  ensureSettingsTable,
+  signAuthToken,
 });
-
-// ƒo. FORGOT PASSWORD (send reset code)
-app.post("/api/auth/forgot-password", async (req, res) => {
-  try {
-    const { email } = req.body;
-    if (!email) {
-      return res.status(400).json({ message: "email is required" });
-    }
-
-    const [users] = await db.query("SELECT id FROM users WHERE email = ?", [email]);
-    if (users.length === 0) {
-      return res.json({ message: "If the email exists, a reset code has been sent." });
-    }
-
-    const resetCode = generateOtp();
-
-    await db.query(
-      `INSERT INTO password_resets (email, otp_code, otp_expires_at)
-       VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 10 MINUTE))
-       ON DUPLICATE KEY UPDATE
-         otp_code = VALUES(otp_code),
-         otp_expires_at = VALUES(otp_expires_at)`,
-      [email, resetCode]
-    );
-
-    await sendResetEmail(email, resetCode);
-
-    return res.json({ message: "Reset code sent to your email." });
-  } catch (err) {
-    console.error("FORGOT PASSWORD ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
+const universityController = createUniversityController({
+  db,
+  toNumber,
+  scholarshipTextChanged,
+  notifyUsersAboutScholarshipUpdate,
+  logUniversityAudit,
 });
-
-// ƒo. RESET PASSWORD (verify code + update)
-app.post("/api/auth/reset-password", async (req, res) => {
-  try {
-    const { email, otp, new_password } = req.body;
-    if (!email || !otp || !new_password) {
-      return res.status(400).json({ message: "email, otp, new_password are required" });
-    }
-
-    const [rows] = await db.query(
-      `SELECT email
-       FROM password_resets
-       WHERE email = ? AND otp_code = ? AND otp_expires_at > NOW()`,
-      [email, otp]
-    );
-
-    if (rows.length === 0) {
-      return res.status(400).json({ message: "Invalid or expired code" });
-    }
-
-    const password_hash = await bcrypt.hash(new_password, 10);
-    await db.query("UPDATE users SET password_hash = ? WHERE email = ?", [
-      password_hash,
-      email,
-    ]);
-
-    await db.query("DELETE FROM password_resets WHERE email = ?", [email]);
-
-    return res.json({ message: "Password updated. You can now log in." });
-  } catch (err) {
-    console.error("RESET PASSWORD ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
-});
-
-// ✅ LOGIN
-app.post("/api/auth/login", async (req, res) => {
-  try {
-    const { email, password } = req.body;
-
-    if (!email || !password) {
-      return res.status(400).json({ message: "email and password are required" });
-    }
-
-    const [rows] = await db.query(
-      "SELECT id, full_name, email, password_hash, role, is_active FROM users WHERE email = ?",
-      [email]
-    );
-
-    if (rows.length === 0) {
-      return res.status(401).json({ message: "Invalid credentials" });
-    }
-
-    const user = rows[0];
-
-    if (!user.is_active) {
-      return res.status(403).json({ message: "Account is inactive" });
-    }
-
-    if (!user.password_hash) {
-      return res.status(500).json({
-        message: "Server error",
-        details: "password_hash missing for this user. Re-signup user.",
-      });
-    }
-
-    const ok = await bcrypt.compare(password, user.password_hash);
-    if (!ok) return res.status(401).json({ message: "Invalid credentials" });
-
-    if (!process.env.JWT_SECRET) {
-      return res.status(500).json({
-        message: "Server error",
-        details: "JWT_SECRET missing in .env",
-      });
-    }
-
-    const token = jwt.sign(
-      { id: user.id, email: user.email, full_name: user.full_name, role: user.role },
-      process.env.JWT_SECRET,
-      { expiresIn: "7d" }
-    );
-
-    return res.json({
-      message: "Login successful",
-      token,
-      user: { id: user.id, full_name: user.full_name, email: user.email, role: user.role },
-    });
-  } catch (err) {
-    console.error("LOGIN ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
-});
-
-// ƒo. AGENT USERS LIST
-app.get("/api/settings", authMiddleware, async (req, res) => {
-  try {
-    const [[userRow]] = await db.query(
-      `SELECT id, full_name, email, role
-       FROM users
-       WHERE id = ?`,
-      [req.user.id]
-    );
-
-    if (!userRow) {
-      return res.status(404).json({ message: "User not found" });
-    }
-
-    let settingRows = [];
-    try {
-      const [rows] = await db.query(
-        `SELECT email_notifications, scholarship_alerts, marketing_updates, preferred_currency
-         FROM user_settings
-         WHERE user_id = ?`,
-        [req.user.id]
-      );
-      settingRows = rows;
-    } catch (settingsErr) {
-      if (settingsErr.code === "ER_NO_SUCH_TABLE") {
-        await ensureSettingsTable();
-      } else {
-        throw settingsErr;
-      }
-    }
-
-    const settings = settingRows[0] || {
-      email_notifications: 1,
-      scholarship_alerts: 1,
-      marketing_updates: 0,
-      preferred_currency: "USD",
-    };
-
-    return res.json({
-      profile: {
-        full_name: userRow.full_name || "",
-        email: userRow.email || "",
-        role: userRow.role || "student",
-      },
-      preferences: {
-        email_notifications: !!settings.email_notifications,
-        scholarship_alerts: !!settings.scholarship_alerts,
-        marketing_updates: !!settings.marketing_updates,
-        preferred_currency: settings.preferred_currency || "USD",
-      },
-    });
-  } catch (err) {
-    console.error("GET SETTINGS ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
-});
-
-app.put("/api/settings/profile", authMiddleware, async (req, res) => {
-  try {
-    const { full_name, email } = req.body;
-    if (!full_name || !email) {
-      return res.status(400).json({ message: "full_name and email are required" });
-    }
-
-    const normalizedEmail = String(email).trim().toLowerCase();
-    const normalizedName = String(full_name).trim();
-
-    const [exists] = await db.query(
-      "SELECT id FROM users WHERE email = ? AND id <> ?",
-      [normalizedEmail, req.user.id]
-    );
-    if (exists.length > 0) {
-      return res.status(409).json({ message: "Email already in use" });
-    }
-
-    await db.query(
-      "UPDATE users SET full_name = ?, email = ? WHERE id = ?",
-      [normalizedName, normalizedEmail, req.user.id]
-    );
-
-    const [rows] = await db.query(
-      "SELECT id, full_name, email, role FROM users WHERE id = ?",
-      [req.user.id]
-    );
-    const user = rows[0];
-
-    const token = jwt.sign(
-      { id: user.id, email: user.email, full_name: user.full_name, role: user.role },
-      process.env.JWT_SECRET,
-      { expiresIn: "7d" }
-    );
-
-    return res.json({
-      message: "Profile settings updated",
-      token,
-      user: { id: user.id, full_name: user.full_name, email: user.email, role: user.role },
-    });
-  } catch (err) {
-    console.error("UPDATE SETTINGS PROFILE ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
-});
-
-app.put("/api/settings/password", authMiddleware, async (req, res) => {
-  try {
-    const { current_password, new_password } = req.body;
-
-    if (!current_password || !new_password) {
-      return res.status(400).json({ message: "current_password and new_password are required" });
-    }
-    if (String(new_password).length < 6) {
-      return res.status(400).json({ message: "New password must be at least 6 characters" });
-    }
-
-    const [rows] = await db.query(
-      "SELECT password_hash FROM users WHERE id = ?",
-      [req.user.id]
-    );
-    if (rows.length === 0) {
-      return res.status(404).json({ message: "User not found" });
-    }
-
-    const user = rows[0];
-    const ok = await bcrypt.compare(current_password, user.password_hash || "");
-    if (!ok) {
-      return res.status(401).json({ message: "Current password is incorrect" });
-    }
-
-    const password_hash = await bcrypt.hash(new_password, 10);
-    await db.query("UPDATE users SET password_hash = ? WHERE id = ?", [password_hash, req.user.id]);
-
-    return res.json({ message: "Password updated successfully" });
-  } catch (err) {
-    console.error("UPDATE SETTINGS PASSWORD ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
-});
-
-app.put("/api/settings/preferences", authMiddleware, async (req, res) => {
-  try {
-    const {
-      email_notifications = true,
-      scholarship_alerts = true,
-      marketing_updates = false,
-      preferred_currency = "USD",
-    } = req.body;
-
-    const allowedCurrencies = ["USD", "CAD", "AUD", "GBP", "NPR"];
-    const safeCurrency = allowedCurrencies.includes(String(preferred_currency).toUpperCase())
-      ? String(preferred_currency).toUpperCase()
-      : "USD";
-
-    await ensureSettingsTable();
-
-    await db.query(
-      `INSERT INTO user_settings
-          (user_id, email_notifications, scholarship_alerts, marketing_updates, preferred_currency)
-        VALUES (?, ?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE
-          email_notifications = VALUES(email_notifications),
-          scholarship_alerts = VALUES(scholarship_alerts),
-          marketing_updates = VALUES(marketing_updates),
-          preferred_currency = VALUES(preferred_currency)`,
-      [
-        req.user.id,
-        email_notifications ? 1 : 0,
-        scholarship_alerts ? 1 : 0,
-        marketing_updates ? 1 : 0,
-        safeCurrency,
-      ]
-    );
-
-    return res.json({ message: "Preferences updated" });
-  } catch (err) {
-    console.error("UPDATE SETTINGS PREFERENCES ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
-});
-app.get("/api/admin/users", authMiddleware, requireAdmin, async (req, res) => {
-  try {
-    const { search = "", role = "", active = "" } = req.query;
-    const filters = [];
-    const params = [];
-
-    if (search) {
-      filters.push("(full_name LIKE ? OR email LIKE ?)");
-      params.push(`%${search}%`, `%${search}%`);
-    }
-    if (role) {
-      filters.push("role = ?");
-      params.push(role);
-    }
-    if (active !== "") {
-      filters.push("is_active = ?");
-      params.push(active === "1" ? 1 : 0);
-    }
-
-    const whereClause = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
-
-    const [rows] = await db.query(
-      `SELECT id, full_name, email, role, is_active, created_at
-       FROM users
-       ${whereClause}
-       ORDER BY created_at DESC
-       LIMIT 200`,
-      params
-    );
-
-    return res.json({ users: rows });
-  } catch (err) {
-    console.error("ADMIN LIST ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
-});
-
-// ƒo. ADMIN UPDATE ROLE
-app.patch("/api/admin/users/:id/role", authMiddleware, requireAdmin, async (req, res) => {
-  try {
-    const { role } = req.body;
-    const allowedRoles = ["student", "agent", "admin"];
-    if (!role) {
-      return res.status(400).json({ message: "role is required" });
-    }
-    if (!allowedRoles.includes(role)) {
-      return res.status(400).json({ message: "Invalid role" });
-    }
-    await db.query("UPDATE users SET role = ? WHERE id = ?", [role, req.params.id]);
-    return res.json({ message: "Role updated" });
-  } catch (err) {
-    console.error("ADMIN ROLE ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
-});
-
-// ƒo. ADMIN UPDATE STATUS
-app.patch("/api/admin/users/:id/status", authMiddleware, requireAdmin, async (req, res) => {
-  try {
-    const { is_active } = req.body;
-    await db.query("UPDATE users SET is_active = ? WHERE id = ?", [
-      is_active ? 1 : 0,
-      req.params.id,
-    ]);
-    return res.json({ message: "Status updated" });
-  } catch (err) {
-    console.error("ADMIN STATUS ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
-});
-
-// ƒo. ADMIN DELETE USER
-app.delete("/api/admin/users/:id", authMiddleware, requireAdmin, async (req, res) => {
-  try {
-    await db.query("DELETE FROM users WHERE id = ?", [req.params.id]);
-    return res.json({ message: "User deleted" });
-  } catch (err) {
-    console.error("ADMIN DELETE ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
-});
-
-// ƒo. PUBLIC UNIVERSITIES LIST
-app.get("/api/admin/summary", authMiddleware, requireAgentOrAdmin, async (req, res) => {
-  try {
-    const [[studentRows], [agentRows], [documentRows]] = await Promise.all([
-      db.query("SELECT COUNT(*) AS count FROM users WHERE role = 'student'"),
-      db.query("SELECT COUNT(*) AS count FROM users WHERE role = 'agent' AND is_active = 1"),
-      db.query("SELECT COUNT(*) AS count FROM user_documents"),
-    ]);
-
-    let applicationsSubmitted = 0;
-    try {
-      const [[applicationRows]] = await db.query("SELECT COUNT(*) AS count FROM applications");
-      applicationsSubmitted = applicationRows.count || 0;
-    } catch {
-      applicationsSubmitted = 0;
-    }
-
-    return res.json({
-      total_students: studentRows[0]?.count || 0,
-      active_agents: agentRows[0]?.count || 0,
-      pending_document_reviews: documentRows[0]?.count || 0,
-      applications_submitted: applicationsSubmitted,
-    });
-  } catch (err) {
-    console.error("ADMIN SUMMARY ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
-});
-
-app.get("/api/admin/documents", authMiddleware, requireAgentOrAdmin, async (req, res) => {
-  try {
-    const [rows] = await db.query(
-      `SELECT d.id, d.user_id, d.file_name, d.file_size, d.file_url, d.mime_type, d.created_at,
-              u.full_name, u.email
-       FROM user_documents d
-       JOIN users u ON u.id = d.user_id
-       ORDER BY d.created_at DESC`
-    );
-
-    return res.json({ documents: rows });
-  } catch (err) {
-    console.error("ADMIN DOCUMENTS ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
-});
-
-app.get("/api/admin/applications", authMiddleware, requireAgentOrAdmin, async (req, res) => {
-  try {
-    const [tables] = await db.query("SHOW TABLES LIKE 'applications'");
-    if (!tables.length) {
-      return res.json({ applications: [], columns: [] });
-    }
-
-    const [columns] = await db.query("SHOW COLUMNS FROM applications");
-    const columnNames = columns.map((column) => column.Field);
-    const [rows] = await db.query("SELECT * FROM applications ORDER BY 1 DESC LIMIT 200");
-
-    return res.json({ applications: rows, columns: columnNames });
-  } catch (err) {
-    console.error("ADMIN APPLICATIONS ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
-});
-
-app.get("/api/admin/counseling-requests", authMiddleware, requireAgentOrAdmin, async (req, res) => {
-  try {
-    const [tables] = await db.query("SHOW TABLES LIKE 'counseling_requests'");
-    if (!tables.length) {
-      return res.json({ requests: [] });
-    }
-
-    const [rows] = await db.query("SELECT * FROM counseling_requests ORDER BY 1 DESC LIMIT 200");
-    return res.json({ requests: rows });
-  } catch (err) {
-    console.error("COUNSELING REQUESTS ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
-});
-
-app.get("/api/universities", async (req, res) => {
-  try {
-    const page = Math.max(1, Number(req.query.page || 1));
-    const limit = Math.max(1, Math.min(200, Number(req.query.limit || 10)));
-    const offset = (page - 1) * limit;
-    const q = String(req.query.q || "").trim();
-    const country = String(req.query.country || "").trim();
-
-    const filters = [];
-    const params = [];
-    if (country) {
-      filters.push("LOWER(country) LIKE LOWER(?)");
-      params.push(`%${country}%`);
-    }
-    if (q) {
-      filters.push("(name LIKE ? OR country LIKE ? OR city LIKE ?)");
-      params.push(`%${q}%`, `%${q}%`, `%${q}%`);
-    }
-    const whereClause = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
-
-    const [[countRow]] = await db.query(
-      `SELECT COUNT(*) AS total FROM universities ${whereClause}`,
-      params
-    );
-    const total = countRow.total || 0;
-
-    const [rows] = await db.query(
-      `SELECT id, name, country, city, ranking, website, image_url, fees, courses, scholarships
-       FROM universities
-       ${whereClause}
-       ORDER BY ranking IS NULL, ranking ASC, name ASC
-       LIMIT ? OFFSET ?`,
-      [...params, limit, offset]
-    );
-
-    return res.json({ universities: rows, total, page, limit });
-  } catch (err) {
-    console.error("UNIVERSITIES LIST ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
-});
-
-app.get("/api/universities/:id", async (req, res) => {
-  try {
-    const [rows] = await db.query(
-      `SELECT id, name, country, city, ranking, website, overview, courses, fees,
-              facilities, scholarships, admissions, location, contact, image_url
-       FROM universities
-       WHERE id = ?`,
-      [req.params.id]
-    );
-
-    if (rows.length === 0) {
-      return res.status(404).json({ message: "University not found" });
-    }
-
-    return res.json({ university: rows[0] });
-  } catch (err) {
-    console.error("UNIVERSITY DETAIL ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
-});
-
-// ƒo. AGENT ADD UNIVERSITY
-const toNumber = (value) => {
-  if (value === null || value === undefined) return null;
-  const parsed = Number(String(value).trim());
-  return Number.isFinite(parsed) ? parsed : null;
-};
-
-const firstCountry = (preferredCountries) => {
-  if (!preferredCountries) return null;
-  const parts = String(preferredCountries)
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean);
-  return parts.length ? parts[0] : null;
-};
-
-const scholarshipTier = (score) => {
-  if (score >= 85) return { title: "High Merit Scholarship", coverage: "40% - 70% tuition waiver" };
-  if (score >= 65) return { title: "Merit Scholarship", coverage: "20% - 40% tuition waiver" };
-  if (score >= 45) return { title: "Admission Scholarship", coverage: "10% - 25% tuition support" };
-  return { title: "Application Grant", coverage: "Up to 10% tuition support" };
-};
-
-const parseFeeAmount = (feeText) => {
-  if (!feeText) return null;
-  const normalized = String(feeText).replace(/,/g, "");
-  const matches = normalized.match(/\d{4,6}(\.\d+)?/g);
-  if (!matches?.length) return null;
-  const largest = matches
-    .map((value) => Number(value))
-    .filter((value) => Number.isFinite(value))
-    .sort((a, b) => b - a)[0];
-  return largest || null;
-};
-
-app.get("/api/scholarships/recommended", authMiddleware, async (req, res) => {
-  try {
-    const [[academic]] = await db.query(
-      `SELECT gpa, ielts_score, toefl_score, gre_score, gmat_score, field_of_study
-       FROM user_academics
-       WHERE user_id = ?`,
-      [req.user.id]
-    );
-
-    const [[preferences]] = await db.query(
-      `SELECT degree_level, field_of_study, preferred_countries, annual_budget, preferred_intake
-       FROM user_preferences
-       WHERE user_id = ?`,
-      [req.user.id]
-    );
-
-    const country = firstCountry(preferences?.preferred_countries);
-    const whereClause = country ? "WHERE country LIKE ?" : "";
-    const queryParams = country ? [`%${country}%`] : [];
-
-    const [universities] = await db.query(
-      `SELECT id, name, country, city, ranking, website, image_url, scholarships, courses
-       FROM universities
-       ${whereClause}
-       ORDER BY ranking IS NULL, ranking ASC, name ASC
-       LIMIT 40`,
-      queryParams
-    );
-
-    const gpa = toNumber(academic?.gpa);
-    const ielts = toNumber(academic?.ielts_score);
-    const toefl = toNumber(academic?.toefl_score);
-    const gre = toNumber(academic?.gre_score);
-    const gmat = toNumber(academic?.gmat_score);
-
-    const scoreFromProfile =
-      (gpa !== null ? Math.min(40, (gpa / 4) * 40) : 0) +
-      (ielts !== null ? Math.min(20, (ielts / 9) * 20) : 0) +
-      (toefl !== null ? Math.min(20, (toefl / 120) * 20) : 0) +
-      (gre !== null ? Math.min(10, (gre / 340) * 10) : 0) +
-      (gmat !== null ? Math.min(10, (gmat / 800) * 10) : 0);
-
-    const preferredField = (preferences?.field_of_study || academic?.field_of_study || "").toLowerCase();
-
-    const recommendations = universities.map((uni) => {
-      const reasons = [];
-      let fitScore = 0;
-      const courseText = String(uni.courses || "").toLowerCase();
-      const countryText = String(uni.country || "").toLowerCase();
-      const feeAmount = parseFeeAmount(uni.fees);
-      const budget = toNumber(preferences?.annual_budget);
-
-      if (gpa !== null) {
-        const gpaScore = Math.min(32, (gpa / 4) * 32);
-        fitScore += gpaScore;
-        if (gpa >= 3.7) reasons.push("High GPA fit");
-        else if (gpa >= 3.2) reasons.push("Solid academic profile");
-      }
-
-      if (ielts !== null || toefl !== null) {
-        const languageScore =
-          (ielts !== null ? Math.min(16, (ielts / 9) * 16) : 0) +
-          (toefl !== null ? Math.min(16, (toefl / 120) * 16) : 0);
-        fitScore += Math.min(18, languageScore);
-
-        if (ielts !== null && ielts >= 7) reasons.push("Strong IELTS score");
-        if (toefl !== null && toefl >= 95) reasons.push("Strong TOEFL score");
-      }
-
-      if (gre !== null || gmat !== null) {
-        const examScore =
-          (gre !== null ? Math.min(8, (gre / 340) * 8) : 0) +
-          (gmat !== null ? Math.min(8, (gmat / 800) * 8) : 0);
-        fitScore += Math.min(10, examScore);
-
-        if (gre !== null && gre >= 315) reasons.push("Competitive GRE profile");
-        if (gmat !== null && gmat >= 650) reasons.push("Competitive GMAT profile");
-      }
-
-      if (preferredField && courseText.includes(preferredField)) {
-        fitScore += 14;
-        reasons.push("Intended subject match");
-      }
-
-      if (country && countryText.includes(String(country).toLowerCase())) {
-        fitScore += 10;
-        reasons.push("Country preference match");
-      }
-
-      if (budget !== null && feeAmount !== null) {
-        if (feeAmount <= budget) {
-          fitScore += 10;
-          reasons.push("Budget-compatible");
-        } else if (feeAmount <= budget * 1.2) {
-          fitScore += 4;
-          reasons.push("Slightly above budget but still possible");
-        }
-      }
-
-      const rankScore = uni.ranking ? Math.max(0, 16 - Math.min(16, Math.floor(uni.ranking / 10))) : 6;
-      fitScore += rankScore;
-      if (uni.ranking && uni.ranking <= 50) reasons.push("Highly ranked university");
-
-      fitScore += Math.min(8, scoreFromProfile * 0.08);
-      fitScore = Math.round(Math.min(100, fitScore));
-      const tier = scholarshipTier(fitScore);
-
-      return {
-        university_id: uni.id,
-        university_name: uni.name,
-        country: uni.country,
-        city: uni.city,
-        ranking: uni.ranking,
-        website: uni.website,
-        image_url: uni.image_url,
-        scholarship_name: tier.title,
-        estimated_coverage: tier.coverage,
-        fit_score: fitScore,
-        match_reasons: reasons.slice(0, 5),
-        annual_fee_estimate: feeAmount,
-        note: uni.scholarships || "Merit and need-based scholarships available.",
-      };
-    }).sort((a, b) => b.fit_score - a.fit_score || (a.ranking || 9999) - (b.ranking || 9999));
-
-    return res.json({
-      profile_used: {
-        degree_level: preferences?.degree_level || null,
-        field_of_study: preferences?.field_of_study || academic?.field_of_study || null,
-        preferred_countries: preferences?.preferred_countries || null,
-        annual_budget: preferences?.annual_budget || null,
-        gpa: academic?.gpa || null,
-        ielts_score: academic?.ielts_score || null,
-        toefl_score: academic?.toefl_score || null,
-        gre_score: academic?.gre_score || null,
-        gmat_score: academic?.gmat_score || null,
-      },
-      recommendations,
-    });
-  } catch (err) {
-    console.error("SCHOLARSHIP RECOMMENDATION ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
-});
-app.post("/api/agent/universities", authMiddleware, requireAgentOrAdmin, async (req, res) => {
-  try {
-    const {
-      name,
-      country,
-      city,
-      ranking,
-      website,
-      overview,
-      courses,
-      fees,
-      facilities,
-      scholarships,
-      admissions,
-      location,
-      contact,
-      image_url,
-    } = req.body;
-
-    if (!name || !country) {
-      return res.status(400).json({ message: "name and country are required" });
-    }
-
-    await db.query(
-      `INSERT INTO universities
-        (name, country, city, ranking, website, overview, courses, fees, facilities, scholarships, admissions, location, contact, image_url)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        name,
-        country,
-        city || null,
-        ranking || null,
-        website || null,
-        overview || null,
-        courses || null,
-        fees || null,
-        facilities || null,
-        scholarships || null,
-        admissions || null,
-        location || null,
-        contact || null,
-        image_url || null,
-      ]
-    );
-
-    return res.status(201).json({ message: "University added" });
-  } catch (err) {
-    console.error("ADD UNIVERSITY ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
-});
-
-app.patch("/api/agent/universities/:id", authMiddleware, requireAgentOrAdmin, async (req, res) => {
-  try {
-    const {
-      name,
-      country,
-      city,
-      ranking,
-      website,
-      overview,
-      courses,
-      fees,
-      facilities,
-      scholarships,
-      admissions,
-      location,
-      contact,
-      image_url,
-    } = req.body;
-
-    await db.query(
-      `UPDATE universities
-       SET name = ?, country = ?, city = ?, ranking = ?, website = ?, overview = ?, courses = ?, fees = ?,
-           facilities = ?, scholarships = ?, admissions = ?, location = ?, contact = ?, image_url = ?
-       WHERE id = ?`,
-      [
-        name,
-        country,
-        city || null,
-        ranking || null,
-        website || null,
-        overview || null,
-        courses || null,
-        fees || null,
-        facilities || null,
-        scholarships || null,
-        admissions || null,
-        location || null,
-        contact || null,
-        image_url || null,
-        req.params.id,
-      ]
-    );
-
-    return res.json({ message: "University updated" });
-  } catch (err) {
-    console.error("UPDATE UNIVERSITY ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
-});
-
-app.delete("/api/agent/universities/:id", authMiddleware, requireAdmin, async (req, res) => {
-  try {
-    await db.query("DELETE FROM universities WHERE id = ?", [req.params.id]);
-    return res.json({ message: "University deleted" });
-  } catch (err) {
-    console.error("DELETE UNIVERSITY ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
-});
-
-// ✅ Protected example route (frontend can call this after login)
-app.get("/api/profile", authMiddleware, (req, res) => {
-  res.json({
-    message: "Profile fetched",
-    user: req.user,
-  });
-});
-
-// ✅ start server
-// ?. Get personal profile info
-app.get("/api/profile/personal", authMiddleware, async (req, res) => {
-  try {
-    const [rows] = await db.query(
-      `SELECT u.id, u.full_name, u.email, p.dob, p.gender, p.country, p.nationality, p.city
-       FROM users u
-       LEFT JOIN user_profiles p ON p.user_id = u.id
-       WHERE u.id = ?`,
-      [req.user.id]
-    );
-
-    if (rows.length === 0) {
-      return res.status(404).json({ message: "User not found" });
-    }
-
-    return res.json({ profile: rows[0] });
-  } catch (err) {
-    console.error("GET PERSONAL PROFILE ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
-});
-
-// ?. Update personal profile info
-app.put("/api/profile/personal", authMiddleware, async (req, res) => {
-  try {
-    const { full_name, dob, gender, country, nationality, city } = req.body;
-
-    if (full_name) {
-      await db.query("UPDATE users SET full_name = ? WHERE id = ?", [
-        full_name,
-        req.user.id,
-      ]);
-    }
-
-    await db.query(
-      `INSERT INTO user_profiles (user_id, dob, gender, country, nationality, city)
-       VALUES (?, ?, ?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE
-         dob = VALUES(dob),
-         gender = VALUES(gender),
-         country = VALUES(country),
-         nationality = VALUES(nationality),
-         city = VALUES(city)`,
-      [
-        req.user.id,
-        dob || null,
-        gender || null,
-        country || null,
-        nationality || null,
-        city || null,
-      ]
-    );
-
-    return res.json({ message: "Personal profile updated" });
-  } catch (err) {
-    console.error("UPDATE PERSONAL PROFILE ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
-});
-
-// ?. Get academic background info
-app.get("/api/profile/academic", authMiddleware, async (req, res) => {
-  try {
-    const [rows] = await db.query(
-      `SELECT highest_level, gpa, school_name, graduation_year, field_of_study,
-              ielts_score, toefl_score, gre_score, gmat_score
-       FROM user_academics
-       WHERE user_id = ?`,
-      [req.user.id]
-    );
-
-    return res.json({ academic: rows[0] || null });
-  } catch (err) {
-    console.error("GET ACADEMIC PROFILE ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
-});
-
-// ?. Update academic background info
-app.put("/api/profile/academic", authMiddleware, async (req, res) => {
-  try {
-    const {
-      highest_level,
-      gpa,
-      school_name,
-      graduation_year,
-      field_of_study,
-      ielts_score,
-      toefl_score,
-      gre_score,
-      gmat_score,
-    } = req.body;
-
-    await db.query(
-      `INSERT INTO user_academics
-        (user_id, highest_level, gpa, school_name, graduation_year, field_of_study,
-         ielts_score, toefl_score, gre_score, gmat_score)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE
-         highest_level = VALUES(highest_level),
-         gpa = VALUES(gpa),
-         school_name = VALUES(school_name),
-         graduation_year = VALUES(graduation_year),
-         field_of_study = VALUES(field_of_study),
-         ielts_score = VALUES(ielts_score),
-         toefl_score = VALUES(toefl_score),
-         gre_score = VALUES(gre_score),
-         gmat_score = VALUES(gmat_score)`,
-      [
-        req.user.id,
-        highest_level || null,
-        gpa || null,
-        school_name || null,
-        graduation_year || null,
-        field_of_study || null,
-        ielts_score || null,
-        toefl_score || null,
-        gre_score || null,
-        gmat_score || null,
-      ]
-    );
-
-    return res.json({ message: "Academic background updated" });
-  } catch (err) {
-    console.error("UPDATE ACADEMIC PROFILE ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
-});
-
-// ?. Get study preferences
-app.get("/api/profile/preferences", authMiddleware, async (req, res) => {
-  try {
-    const [rows] = await db.query(
-      `SELECT degree_level, field_of_study, preferred_countries, annual_budget, preferred_intake
-       FROM user_preferences
-       WHERE user_id = ?`,
-      [req.user.id]
-    );
-
-    return res.json({ preferences: rows[0] || null });
-  } catch (err) {
-    console.error("GET STUDY PREFERENCES ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
-});
-
-// ?. Update study preferences
-app.put("/api/profile/preferences", authMiddleware, async (req, res) => {
-  try {
-    const {
-      degree_level,
-      field_of_study,
-      preferred_countries,
-      annual_budget,
-      preferred_intake,
-    } = req.body;
-
-    await db.query(
-      `INSERT INTO user_preferences
-        (user_id, degree_level, field_of_study, preferred_countries, annual_budget, preferred_intake)
-       VALUES (?, ?, ?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE
-         degree_level = VALUES(degree_level),
-         field_of_study = VALUES(field_of_study),
-         preferred_countries = VALUES(preferred_countries),
-         annual_budget = VALUES(annual_budget),
-         preferred_intake = VALUES(preferred_intake)`,
-      [
-        req.user.id,
-        degree_level || null,
-        field_of_study || null,
-        preferred_countries || null,
-        annual_budget || null,
-        preferred_intake || null,
-      ]
-    );
-
-    return res.json({ message: "Study preferences updated" });
-  } catch (err) {
-    console.error("UPDATE STUDY PREFERENCES ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
-});
-
-// ?. Get documents list
-app.get("/api/profile/documents", authMiddleware, async (req, res) => {
-  try {
-    const [rows] = await db.query(
-      `SELECT id, file_name, file_size, file_url, mime_type, created_at
-       FROM user_documents
-       WHERE user_id = ?
-       ORDER BY created_at DESC`,
-      [req.user.id]
-    );
-
-    return res.json({ documents: rows });
-  } catch (err) {
-    console.error("GET DOCUMENTS ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
-});
-
-// ?. Add documents
-app.post(
-  "/api/profile/documents",
+registerAuthRoutes(app, authController);
+registerAdminRoutes(app, {
   authMiddleware,
-  upload.array("documents", 10),
-  async (req, res) => {
-    try {
-      const files = req.files || [];
-
-      if (files.length === 0) {
-        return res.status(400).json({ message: "No documents provided" });
-      }
-
-      const values = files.map((file) => [
-        req.user.id,
-        file.originalname || "Document",
-        `${(file.size / (1024 * 1024)).toFixed(2)} MB`,
-        `/uploads/${file.filename}`,
-        file.mimetype || null,
-      ]);
-
-      await db.query(
-        "INSERT INTO user_documents (user_id, file_name, file_size, file_url, mime_type) VALUES ?",
-        [values]
-      );
-
-      const [rows] = await db.query(
-        `SELECT id, file_name, file_size, file_url, mime_type, created_at
-         FROM user_documents
-         WHERE user_id = ?
-         ORDER BY created_at DESC`,
-        [req.user.id]
-      );
-
-      return res.json({ message: "Documents saved", documents: rows });
-    } catch (err) {
-      console.error("ADD DOCUMENTS ERROR:", err);
-      return res.status(500).json({ message: "Server error", details: err.message });
-    }
-  }
-);
-
-// ?. Delete document
-app.delete("/api/profile/documents/:id", authMiddleware, async (req, res) => {
-  try {
-    const { id } = req.params;
-    await db.query(
-      "DELETE FROM user_documents WHERE id = ? AND user_id = ?",
-      [id, req.user.id]
-    );
-    return res.json({ message: "Document deleted" });
-  } catch (err) {
-    console.error("DELETE DOCUMENT ERROR:", err);
-    return res.status(500).json({ message: "Server error", details: err.message });
-  }
+  requireAdmin,
+  requireAgentOrAdmin,
+  controller: adminController,
 });
+registerProfileRoutes(app, {
+  authMiddleware,
+  controller: profileController,
+});
+registerDocumentRoutes(app, {
+  authMiddleware,
+  documentVaultPinMiddleware,
+  upload,
+  controller: documentController,
+});
+registerSettingsRoutes(app, {
+  authMiddleware,
+  controller: settingsController,
+});
+registerUniversityRoutes(app, {
+  authMiddleware,
+  requireAdmin,
+  requireAgentOrAdmin,
+  controller: universityController,
+});
+const expenseController = createExpenseController({ db });
+registerExpenseRoutes(app, { authMiddleware, controller: expenseController });
+const counselingController = createCounselingController({ db });
+registerCounselingRoutes(app, {
+  authMiddleware,
+  requireAgentOrAdmin,
+  controller: counselingController,
+});
+app.use((err, req, res, next) => {
+  if (!err) return next();
+
+  if (err instanceof multer.MulterError) {
+    if (err.code === "LIMIT_FILE_SIZE") {
+      return res.status(400).json({ message: "Each file must be 10 MB or smaller." });
+    }
+    return res.status(400).json({ message: err.message || "Document upload failed." });
+  }
+
+  if (err.message === "Unsupported document type") {
+    return res.status(400).json({ message: "Only PDF, JPG, PNG, WEBP, DOC, and DOCX files are allowed." });
+  }
+
+  return next(err);
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, async () => {
   console.log(`Server running on http://localhost:${PORT}`);
+  await ensureUniversitiesTable();
   await ensureSettingsTable();
+  await ensureScholarshipCriteriaColumns();
+  await ensureExpensePlansTable();
+  await ensureExpenseEntriesTable();
+  await ensureDocumentReviewColumns();
+  await ensureDocumentVaultColumns();
+  await ensureApplicationsTable();
+  await ensureCounselingRequestsTable();
+  await ensureUniversityAuditLogsTable();
   await seedUniversities();
 });
 
